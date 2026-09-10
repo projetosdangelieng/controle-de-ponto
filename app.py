@@ -236,7 +236,11 @@ if menu == "Lançamento Diário":
 
                 saida = st.time_input("🕑 Hora de Saída", value=pd.to_datetime("17:00").time(), step=timedelta(minutes=1), key="time_saida_fechamento")
 
-                ignorar_almoco = st.checkbox("🍽️ Ignorar desconto de almoço", key="chk_almoco_fechamento")
+                if eh_admin:
+                    ignorar_almoco = st.checkbox("🍽️ Ignorar desconto de almoço", key="chk_almoco_fechamento")
+                else:
+                    # Apenas administradores podem ignorar o desconto de almoço.
+                    ignorar_almoco = False
 
                 if ignorar_almoco:
                     senha_digitada = st.text_input("Senha (obrigatória)", type="password", key="senha_fechamento")
@@ -244,15 +248,18 @@ if menu == "Lançamento Diário":
                     senha_digitada = ""
 
                 if st.button("✔️ Registrar Saída", type="primary"):
-                    is_feriado = db.verificar_feriado(data_str)
-                    sai_str = saida.strftime('%H:%M')
-                    saldo, desc_almoco = rg.calcular_saldo(entrada_bd, sai_str, data_str, is_feriado, ignorar_almoco)
-
-                    if db.registrar_saida(data_str, id_func, sai_str, saldo, desc_almoco):
-                        st.success(f"✅ Ponto fechado! Saldo: {saldo} horas")
-                        st.rerun()
+                    if ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
+                        st.error("❌ Senha obrigatória para ignorar almoço!")
                     else:
-                        st.error("❌ Erro ao registrar saída.")
+                        is_feriado = db.verificar_feriado(data_str)
+                        sai_str = saida.strftime('%H:%M')
+                        saldo, desc_almoco = rg.calcular_saldo(entrada_bd, sai_str, data_str, is_feriado, ignorar_almoco)
+
+                        if db.registrar_saida(data_str, id_func, sai_str, saldo, desc_almoco):
+                            st.success(f"✅ Ponto fechado! Saldo: {saldo} horas")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao registrar saída.")
 
             # === EDIÇÃO / CORREÇÃO (somente administrador) ===
             if eh_admin:
