@@ -79,12 +79,14 @@ with st.sidebar:
             "Lançamento Diário",
             "Ajustes e Saques",
             "Relatórios e Exportação",
-            "Configurações"
+            "Configurações",
+            "Mudar Senha"
         ]
     else:
         # Usuário de funcionário: acesso restrito apenas ao lançamento do
-        # próprio ponto (sem edição/exclusão, sem relatórios/configurações)
-        menu_items = ["Lançamento Diário"]
+        # próprio ponto (sem edição/exclusão, sem relatórios/configurações),
+        # mas pode sempre trocar a própria senha.
+        menu_items = ["Lançamento Diário", "Mudar Senha"]
 
     if len(menu_items) > 1:
         menu = st.radio("Navegação", menu_items, key="menu_principal")
@@ -497,6 +499,59 @@ elif menu == "Relatórios e Exportação":
 
             else:
                 st.info("ℹ️ Nenhum registro encontrado para este período.")
+
+# === MENU: MUDAR SENHA ===
+elif menu == "Mudar Senha":
+    st.header("🔑 Mudar Senha")
+
+    st.subheader("Alterar minha senha")
+    with st.form("form_alterar_senha_propria"):
+        senha_atual = st.text_input("Senha Atual", type="password", key="senha_atual_propria")
+        senha_nova = st.text_input("Nova Senha", type="password", key="senha_nova_propria")
+        senha_nova_conf = st.text_input("Confirmar Nova Senha", type="password", key="senha_nova_conf_propria")
+        submit_propria = st.form_submit_button("✔️ Alterar Minha Senha", type="primary", use_container_width=True)
+
+    if submit_propria:
+        if not senha_atual or not senha_nova or not senha_nova_conf:
+            st.error("❌ Preencha todos os campos.")
+        elif len(senha_nova) < 4:
+            st.error("❌ A nova senha deve ter pelo menos 4 caracteres.")
+        elif senha_nova != senha_nova_conf:
+            st.error("❌ A confirmação não corresponde à nova senha.")
+        else:
+            sucesso, msg = db.alterar_senha(st.session_state["usuario_logado"], senha_atual, senha_nova)
+            if sucesso:
+                st.success(f"✅ {msg}")
+            else:
+                st.error(f"❌ {msg}")
+
+    if st.session_state["eh_admin"]:
+        st.divider()
+        st.subheader("🔐 Redefinir senha de outro usuário (Admin)")
+        st.caption("Como administrador, você pode redefinir a senha de qualquer usuário sem precisar da senha atual dele.")
+
+        usuarios_df = db.listar_usuarios()
+        lista_usuarios = usuarios_df['username'].tolist()
+
+        with st.form("form_redefinir_senha_admin"):
+            usuario_alvo = st.selectbox("Usuário", lista_usuarios, key="usuario_alvo_redefinir")
+            nova_senha_admin = st.text_input("Nova Senha", type="password", key="nova_senha_admin")
+            nova_senha_admin_conf = st.text_input("Confirmar Nova Senha", type="password", key="nova_senha_admin_conf")
+            submit_admin = st.form_submit_button("✔️ Redefinir Senha", type="primary", use_container_width=True)
+
+        if submit_admin:
+            if not nova_senha_admin or not nova_senha_admin_conf:
+                st.error("❌ Preencha todos os campos.")
+            elif len(nova_senha_admin) < 4:
+                st.error("❌ A nova senha deve ter pelo menos 4 caracteres.")
+            elif nova_senha_admin != nova_senha_admin_conf:
+                st.error("❌ A confirmação não corresponde à nova senha.")
+            else:
+                sucesso, msg = db.redefinir_senha_admin(usuario_alvo, nova_senha_admin)
+                if sucesso:
+                    st.success(f"✅ {msg}")
+                else:
+                    st.error(f"❌ {msg}")
 
 # === MENU: CONFIGURAÇÕES ===
 elif menu == "Configurações":
