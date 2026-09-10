@@ -333,6 +333,46 @@ def alterar_admin(username, eh_admin):
     finally:
         conn.close()
 
+def alterar_senha(username, senha_atual, senha_nova):
+    """Permite que o próprio usuário troque sua senha, validando a senha atual."""
+    conn = conectar()
+    try:
+        cursor = conn.execute("SELECT senha_hash FROM usuarios WHERE username = ?", (username,))
+        resultado = cursor.fetchone()
+        if resultado is None:
+            return False, "Usuário não encontrado."
+
+        hash_atual = resultado[0]
+        if not verificar_senha(senha_atual, hash_atual):
+            return False, "Senha atual incorreta."
+
+        novo_hash = hash_senha(senha_nova)
+        conn.execute("UPDATE usuarios SET senha_hash = ? WHERE username = ?", (novo_hash, username))
+        conn.commit()
+        return True, "Senha alterada com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao alterar senha: {e}"
+    finally:
+        conn.close()
+
+def redefinir_senha_admin(username_alvo, nova_senha):
+    """Permite que um administrador redefina a senha de qualquer usuário,
+    sem precisar informar a senha atual."""
+    conn = conectar()
+    try:
+        cursor = conn.execute("SELECT id FROM usuarios WHERE username = ?", (username_alvo,))
+        if cursor.fetchone() is None:
+            return False, "Usuário não encontrado."
+
+        novo_hash = hash_senha(nova_senha)
+        conn.execute("UPDATE usuarios SET senha_hash = ? WHERE username = ?", (novo_hash, username_alvo))
+        conn.commit()
+        return True, f"Senha de '{username_alvo}' redefinida com sucesso!"
+    except Exception as e:
+        return False, f"Erro ao redefinir senha: {e}"
+    finally:
+        conn.close()
+
 # ============= FUNÇÕES DE FUNCIONÁRIOS =============
 
 def adicionar_funcionario(nome):
