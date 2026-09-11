@@ -19,7 +19,20 @@ st.set_page_config(
 )
 
 # Inicializar banco de dados
-db.inicializar_banco()
+#
+# IMPORTANTE: inicializar_banco() faz várias idas ao banco na nuvem (criar
+# tabelas, checar migração de colunas, checar/seedar admin e feriados). Como
+# o Streamlit reexecuta este arquivo do início a cada clique/interação,
+# chamar isso sem cache fazia o app pagar ~9 requisições extras ao Turso em
+# TODA tela — a principal causa da lentidão. Com st.cache_resource, a função
+# roda de fato uma única vez por instância do app (fica em cache entre
+# reruns e entre usuários), e não mais a cada interação.
+@st.cache_resource
+def _inicializar_banco_uma_vez():
+    db.inicializar_banco()
+    return True
+
+_inicializar_banco_uma_vez()
 
 # === SISTEMA DE LOGIN ===
 if "usuario_logado" not in st.session_state:
