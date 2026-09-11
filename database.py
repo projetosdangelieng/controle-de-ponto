@@ -5,6 +5,13 @@ import pandas as pd
 from datetime import datetime
 import bcrypt
 
+# Sessão HTTP reutilizada para todas as chamadas ao Turso. Usar uma única
+# requests.Session (em vez de requests.post avulso a cada chamada) permite
+# manter a conexão TCP/TLS viva (keep-alive) entre uma consulta e outra,
+# evitando pagar um novo handshake a cada requisição — a maior causa de
+# lentidão percebida no app, já que cada tela faz várias consultas.
+_http_session = requests.Session()
+
 # ============= CONEXÃO COM O BANCO (Turso / libSQL na nuvem) =============
 #
 # Este app roda no Streamlit Community Cloud, cujo disco local é apagado a
@@ -109,7 +116,7 @@ class TursoConnection:
         if args:
             stmt["args"] = args
         body = {"requests": [{"type": "execute", "stmt": stmt}, {"type": "close"}]}
-        resp = requests.post(
+        resp = _http_session.post(
             self.http_url,
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
             json=body,
@@ -147,7 +154,6 @@ class TursoConnection:
 
     def close(self):
         pass
-
 
 def conectar():
     if not TURSO_DATABASE_URL or not TURSO_AUTH_TOKEN:
