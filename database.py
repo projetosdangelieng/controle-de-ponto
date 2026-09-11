@@ -12,6 +12,27 @@ import bcrypt
 # lentidão percebida no app, já que cada tela faz várias consultas.
 _http_session = requests.Session()
 
+# Cache leve para listas de referência (funcionários, feriados, usuários) que
+# mudam raramente mas são consultadas em quase toda tela. Usa st.cache_data
+# quando o Streamlit está disponível (produção); vira um "no-op" transparente
+# fora dele (ex.: scripts/testes locais que importam este módulo sozinho).
+try:
+    import streamlit as _st_cache
+    _cache_data = _st_cache.cache_data
+except Exception:
+    def _cache_data(*args, **kwargs):
+        def _decorator(func):
+            func.clear = lambda: None  # compatível com as chamadas .clear() abaixo
+            return func
+        return _decorator
+
+
+def _limpar_cache(func):
+    """Invalida o cache de uma função decorada com @_cache_data, se houver."""
+    clear = getattr(func, "clear", None)
+    if callable(clear):
+        clear()
+
 # ============= CONEXÃO COM O BANCO (Turso / libSQL na nuvem) =============
 #
 # Este app roda no Streamlit Community Cloud, cujo disco local é apagado a
@@ -281,6 +302,7 @@ def criar_usuario(username, senha, eh_admin=False, id_funcionario=None):
         conn.execute("INSERT INTO usuarios (username, senha_hash, eh_admin, id_funcionario) VALUES (?, ?, ?, ?)",
                     (username, senha_hash, eh_admin, id_funcionario))
         conn.commit()
+        _limpar_cache(listar_usuarios)
         return True, "Usuário criado com sucesso!"
     except sqlite3.IntegrityError:
         return False, "Usuário já existe!"
@@ -304,8 +326,11 @@ def autenticar_usuario(username, senha):
         return True, username, eh_admin, id_funcionario
     return False, None, None, None
 
+@_cache_data(ttl=30)
 def listar_usuarios():
-    """Lista todos os usuários (apenas para admin), com o nome do funcionário vinculado."""
+    """Lista todos os usuários (apenas para admin), com o nome do funcionário vinculado.
+    Cacheado por 30s (invalidado explicitamente ao criar/deletar usuário ou
+    alterar permissão de admin) para evitar uma ida ao banco a cada rerun."""
     return _query_df("""
         SELECT u.id, u.username, u.eh_admin,
                COALESCE(f.nome, '—') as funcionario_vinculado,
@@ -321,6 +346,7 @@ def deletar_usuario(username):
     try:
         conn.execute("DELETE FROM usuarios WHERE username = ?", (username,))
         conn.commit()
+        _limpar_cache(listar_usuarios)
         return True, "Usuário deletado!"
     except Exception as e:
         return False, f"Erro ao deletar: {e}"
@@ -333,6 +359,7 @@ def alterar_admin(username, eh_admin):
     try:
         conn.execute("UPDATE usuarios SET eh_admin = ? WHERE username = ?", (eh_admin, username))
         conn.commit()
+        _limpar_cache(listar_usuarios)
         return True, "Permissão atualizada!"
     except Exception as e:
         return False, f"Erro: {e}"
@@ -387,14 +414,18 @@ def adicionar_funcionario(nome):
     try:
         conn.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
         conn.commit()
+        _limpar_cache(listar_funcionarios)
         return True
     except sqlite3.IntegrityError:
         return False  # Já existe
     finally:
         conn.close()
 
+@_cache_data(ttl=30)
 def listar_funcionarios():
-    """Lista todos os funcionários."""
+    """Lista todos os funcionários. Cacheado por 30s (invalidado explicitamente
+    ao adicionar/remover funcionário) — é a consulta mais repetida do app,
+    chamada em praticamente toda tela."""
     return _query_df("SELECT * FROM funcionarios ORDER BY nome")
 
 def deletar_funcionario(id_funcionario):
@@ -405,6 +436,7 @@ def deletar_funcionario(id_funcionario):
         conn.execute("DELETE FROM ajustes WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM funcionarios WHERE id = ?", (id_funcionario,))
         conn.commit()
+        _limpar_cache(listar_funcionarios)
         return True
     except Exception as e:
         return False
@@ -590,8 +622,10 @@ def verificar_feriado(data_str):
     conn.close()
     return feriado is not None
 
+@_cache_data(ttl=30)
 def listar_feriados():
-    """Lista todos os feriados cadastrados."""
+    """Lista todos os feriados cadastrados. Cacheado por 30s (invalidado
+    explicitamente ao adicionar/remover feriado)."""
     return _query_df("SELECT * FROM feriados ORDER BY data")
 
 def adicionar_feriado(data, descricao):
@@ -600,6 +634,7 @@ def adicionar_feriado(data, descricao):
     try:
         conn.execute("INSERT INTO feriados (data, descricao) VALUES (?, ?)", (data, descricao))
         conn.commit()
+        _limpar_cache(listar_feriados)
         return True
     except sqlite3.IntegrityError:
         return False
@@ -612,6 +647,7 @@ def remover_feriado(data):
     try:
         conn.execute("DELETE FROM feriados WHERE data = ?", (data,))
         conn.commit()
+        _limpar_cache(listar_feriados)
         return True
     except Exception as e:
         return False
