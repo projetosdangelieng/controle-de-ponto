@@ -2,7 +2,7 @@ import streamlit as st
 import database as db
 import regras as rg
 import utils as ut
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 import pandas as pd
 
 # Meses em português para exibição amigável nos filtros
