@@ -577,7 +577,7 @@ elif menu == "Mudar Senha":
 elif menu == "Configurações":
     st.header("⚙️ Configurações")
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Funcionários", "🔐 Usuários", "📆 Feriados", "ℹ️ Sobre", "💾 Backup"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Funcionários", "🔐 Usuários", "📆 Feriados", "ℹ️ Sobre", "💾 Backup"])
 
     # === TAB 1: FUNCIONÁRIOS ===
     with tab1:
@@ -727,6 +727,7 @@ elif menu == "Configurações":
         ---
         *Desenvolvido com Python, Streamlit, SQLite e ❤️*
         """)
+
     # === TAB 5: BACKUP COMPLETO (Apenas Admin) ===
     with tab5:
         st.subheader("💾 Backup Completo do Banco de Dados")
