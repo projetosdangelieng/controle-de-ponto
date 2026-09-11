@@ -577,7 +577,7 @@ elif menu == "Mudar Senha":
 elif menu == "Configurações":
     st.header("⚙️ Configurações")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["👥 Funcionários", "🔐 Usuários", "📆 Feriados", "ℹ️ Sobre"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 Funcionários", "🔐 Usuários", "📆 Feriados", "ℹ️ Sobre", "💾 Backup"])
 
     # === TAB 1: FUNCIONÁRIOS ===
     with tab1:
@@ -727,3 +727,35 @@ elif menu == "Configurações":
         ---
         *Desenvolvido com Python, Streamlit, SQLite e ❤️*
         """)
+    # === TAB 5: BACKUP COMPLETO (Apenas Admin) ===
+    with tab5:
+        st.subheader("💾 Backup Completo do Banco de Dados")
+        st.caption(
+            "Gera um arquivo Excel com uma cópia bruta e completa de todas as "
+            "tabelas do banco na nuvem (Turso): funcionários, registros de "
+            "ponto, ajustes, feriados e usuários. Use isso periodicamente para "
+            "guardar uma cópia de segurança fora do Turso (ex.: no seu OneDrive)."
+        )
+        st.warning(
+            "⚠️ O arquivo gerado inclui a aba **usuarios**, com os hashes de "
+            "senha (bcrypt) de cada login. Não são as senhas em texto puro, "
+            "mas ainda assim guarde este arquivo em local seguro e não o "
+            "compartilhe livremente."
+        )
+
+        if st.button("📦 Gerar Backup Completo", type="primary", use_container_width=True):
+            with st.spinner("Consultando todas as tabelas no banco..."):
+                tabelas = db.obter_backup_completo()
+                arquivo_backup, nome_arquivo_backup = ut.exportar_backup_completo_excel(tabelas)
+
+            resumo_linhas = ", ".join(f"{nome}: {len(df)}" for nome, df in tabelas.items())
+            st.success(f"✅ Backup gerado! ({resumo_linhas})")
+
+            st.download_button(
+                label="⬇️ Baixar Backup Completo (.xlsx)",
+                data=arquivo_backup,
+                file_name=nome_arquivo_backup,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
