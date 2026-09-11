@@ -3,6 +3,98 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import datetime
 from io import BytesIO
 
+
+def exportar_backup_completo_excel(dict_tabelas):
+    """Gera um arquivo Excel de backup completo do banco de dados (Turso),
+    com uma aba de resumo e uma aba por tabela (cada linha do banco vira uma
+    linha na planilha, sem nenhum tratamento — é uma cópia bruta dos dados).
+    dict_tabelas: dicionário {nome_tabela: dataframe}, como o devolvido por
+    database.obter_backup_completo().
+    Retorna (bytes_do_arquivo, nome_sugerido_do_arquivo).
+
+    ATENÇÃO: a aba "usuarios" inclui a coluna senha_hash (hash bcrypt, não a
+    senha em texto puro) — mesmo sendo um hash, este arquivo deve ser
+    guardado em local seguro e não compartilhado livremente.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nome_arquivo = f"Backup_Completo_ControleDePonto_{timestamp}.xlsx"
+
+    wb = Workbook()
+
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    # === ABA DE RESUMO ===
+    ws_resumo = wb.active
+    ws_resumo.title = "Resumo"
+
+    ws_resumo.merge_cells("A1:C1")
+    titulo = ws_resumo["A1"]
+    titulo.value = "BACKUP COMPLETO — CONTROLE DE PONTO"
+    titulo.font = Font(size=14, bold=True, color="FFFFFF")
+    titulo.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    titulo.alignment = Alignment(horizontal="center", vertical="center")
+    ws_resumo.row_dimensions[1].height = 25
+
+    ws_resumo["A2"] = f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M:%S')}"
+    ws_resumo["A2"].font = Font(size=10, italic=True)
+
+    ws_resumo["A4"] = "⚠️ Este arquivo contém uma cópia bruta e completa de todas as tabelas do banco de dados na nuvem (Turso), incluindo a aba 'usuarios' com hashes de senha (bcrypt). Guarde em local seguro."
+    ws_resumo["A4"].font = Font(size=10, color="C00000")
+    ws_resumo.merge_cells("A4:C4")
+    ws_resumo["A4"].alignment = Alignment(wrap_text=True, vertical="center")
+    ws_resumo.row_dimensions[4].height = 45
+
+    headers_resumo = ["Tabela", "Linhas", "Colunas"]
+    for col_num, header in enumerate(headers_resumo, 1):
+        cell = ws_resumo.cell(row=6, column=col_num)
+        cell.value = header
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    linha = 7
+    for nome_tabela, df in dict_tabelas.items():
+        ws_resumo.cell(row=linha, column=1).value = nome_tabela
+        ws_resumo.cell(row=linha, column=2).value = len(df)
+        ws_resumo.cell(row=linha, column=3).value = len(df.columns)
+        for col_num in range(1, 4):
+            ws_resumo.cell(row=linha, column=col_num).border = thin_border
+        linha += 1
+
+    ws_resumo.column_dimensions['A'].width = 20
+    ws_resumo.column_dimensions['B'].width = 12
+    ws_resumo.column_dimensions['C'].width = 12
+
+    # === UMA ABA POR TABELA ===
+    for nome_tabela, df in dict_tabelas.items():
+        ws = wb.create_sheet(title=nome_tabela[:31])  # limite de 31 chars do Excel
+
+        for col_num, coluna in enumerate(df.columns, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.value = str(coluna)
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        for row_idx, row in enumerate(df.itertuples(index=False), start=2):
+            for col_idx, valor in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.value = valor
+                cell.border = thin_border
+
+        for col_num in range(1, len(df.columns) + 1):
+            ws.column_dimensions[chr(64 + col_num) if col_num <= 26 else "A"].width = 20
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue(), nome_arquivo
+
 def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim):
     """
     Gera o extrato de um funcionário como um arquivo Excel formatado e profissional.
