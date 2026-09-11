@@ -1,10 +1,7 @@
-import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
 from datetime import datetime
 from io import BytesIO
-import os
 
 def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim):
     """
@@ -212,25 +209,3 @@ def exportar_relatorio_consolidado_excel(dict_funcionarios):
     wb.save(buffer)
     buffer.seek(0)
     return buffer.getvalue(), nome_arquivo
-
-def get_diretorio_onedrive():
-    """
-    Tenta encontrar a pasta OneDrive do usuário.
-    Retorna o caminho se encontrar, caso contrário retorna None.
-    """
-    import os
-    from pathlib import Path
-
-    # Tentar diferentes caminhos possíveis do OneDrive
-    user_home = str(Path.home())
-    possiveis_caminhos = [
-        os.path.join(user_home, "OneDrive"),
-        os.path.join(user_home, "OneDrive - Pessoal"),
-        os.path.join(user_home, "OneDrive - Trabalho"),
-    ]
-
-    for caminho in possiveis_caminhos:
-        if os.path.exists(caminho):
-            return caminho
-
-    return None
