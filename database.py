@@ -654,6 +654,21 @@ def remover_feriado(data):
     finally:
         conn.close()
 
+# ============= BACKUP COMPLETO (ADMIN) =============
+
+def obter_backup_completo():
+    """Retorna um dicionário {nome_tabela: DataFrame} com o conteúdo bruto e
+    completo de todas as tabelas do banco (Turso), para uso em backups feitos
+    pelo administrador. Não é cacheado (deve sempre refletir o estado real no
+    momento em que o backup é gerado)."""
+    return {
+        "usuarios": _query_df("SELECT * FROM usuarios ORDER BY id"),
+        "funcionarios": _query_df("SELECT * FROM funcionarios ORDER BY id"),
+        "registros": _query_df("SELECT * FROM registros ORDER BY data, id_funcionario"),
+        "ajustes": _query_df("SELECT * FROM ajustes ORDER BY data, id_funcionario"),
+        "feriados": _query_df("SELECT * FROM feriados ORDER BY data"),
+    }
+
 # Feriados de 2026 aplicáveis à cidade do Rio de Janeiro (nacionais + estaduais
 # RJ + municipais Rio de Janeiro). Pesquisado em 10/09/2026. Esta lista é apenas
 # uma pré-configuração inicial: pode ser livremente editada, complementada
