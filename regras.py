@@ -1,4 +1,54 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+# Fuso horário de Brasília. O servidor (Streamlit Cloud) roda em UTC, então
+# 'date.today()' / 'datetime.now()' sem fuso NÃO refletem o horário de Brasília.
+# Se o banco de fusos do sistema não estiver disponível, usa UTC-3 fixo
+# (o Brasil não tem horário de verão desde 2019).
+try:
+    from zoneinfo import ZoneInfo
+    FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    FUSO_BRASILIA = timezone(timedelta(hours=-3))
+
+
+def agora_brasilia():
+    """Data e hora atuais em Brasília."""
+    return datetime.now(FUSO_BRASILIA)
+
+
+def hoje_brasilia():
+    """Data de hoje em Brasília (use no lugar de date.today())."""
+    return agora_brasilia().date()
+
+
+def validar_horario_nao_futuro(data_str, *horarios):
+    """
+    Impede lançamentos com data ou horário no futuro, pelo relógio de Brasília.
+    - data_str: 'AAAA-MM-DD'
+    - horarios: um ou mais 'HH:MM' (vazios são ignorados)
+    Retorna (ok, mensagem). Se ok=False, a mensagem explica o motivo.
+    """
+    agora = agora_brasilia()
+    hoje = agora.date()
+    data_obj = datetime.strptime(data_str, '%Y-%m-%d').date()
+
+    if data_obj > hoje:
+        return False, (
+            f"Não é permitido lançar em data futura. "
+            f"Hoje em Brasília é {hoje.strftime('%d/%m/%Y')}."
+        )
+
+    if data_obj == hoje:
+        hora_atual = agora.strftime('%H:%M')
+        for h in horarios:
+            if h and h > hora_atual:
+                return False, (
+                    f"Não é permitido lançar horário futuro. "
+                    f"Agora em Brasília são {hora_atual} e você informou {h}."
+                )
+
+    return True, ""
+
 
 def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_almoco=False):
     """
