@@ -50,6 +50,60 @@ def validar_horario_nao_futuro(data_str, *horarios):
     return True, ""
 
 
+def validar_entrada_horario_atual(data_str, hora_str, tolerancia_min=10):
+    """
+    Regra da ENTRADA para usuários comuns: só vale o dia de hoje e um horário
+    entre (agora - tolerancia_min) e agora, pelo relógio de Brasília.
+    Não aceita horário anterior a essa janela nem horário futuro.
+    Retorna (ok, mensagem).
+    """
+    agora = agora_brasilia()
+    hoje = agora.date()
+    data_obj = datetime.strptime(data_str, '%Y-%m-%d').date()
+
+    if data_obj != hoje:
+        return False, (
+            f"A entrada só pode ser registrada no dia de hoje "
+            f"({hoje.strftime('%d/%m/%Y')}). Retroativos são feitos pelo administrador."
+        )
+
+    hh, mm = map(int, hora_str.split(':'))
+    minutos_informado = hh * 60 + mm
+    minutos_agora = agora.hour * 60 + agora.minute
+    hora_atual = agora.strftime('%H:%M')
+
+    if minutos_informado > minutos_agora:
+        return False, (
+            f"Não é permitido lançar horário futuro. "
+            f"Agora em Brasília são {hora_atual} e você informou {hora_str}."
+        )
+
+    if minutos_informado < minutos_agora - tolerancia_min:
+        return False, (
+            f"Horário anterior ao permitido. Agora em Brasília são {hora_atual}; "
+            f"a entrada aceita de {tolerancia_min} min atrás até agora. "
+            f"Retroativos são feitos pelo administrador."
+        )
+
+    return True, ""
+
+
+def dia_bloqueado_para_usuario(data_str, is_feriado=False):
+    """
+    Sábados, domingos e feriados só podem ser lançados por administradores.
+    Retorna (bloqueado, motivo).
+    """
+    data_obj = datetime.strptime(data_str, '%Y-%m-%d').date()
+    dia = data_obj.weekday()
+    if dia == 5:
+        return True, "Sábado."
+    if dia == 6:
+        return True, "Domingo."
+    if is_feriado:
+        return True, "Feriado."
+    return False, ""
+
+
 def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_almoco=False):
     """
     Calcula o saldo de horas decimais do dia baseado nas regras de negócio estabelecidas.
