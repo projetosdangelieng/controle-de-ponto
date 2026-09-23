@@ -155,6 +155,13 @@ if menu == "Lançamento Diário":
 
         data_str = data_registro.strftime('%Y-%m-%d')
 
+        # Usuários comuns não lançam ponto em sábados, domingos e feriados.
+        if not eh_admin:
+            dia_bloqueado, motivo_bloqueio = rg.dia_bloqueado_para_usuario(data_str, db.verificar_feriado(data_str))
+            if dia_bloqueado:
+                st.error(f"🚫 {motivo_bloqueio} Apenas administradores podem lançar ponto em sábados, domingos e feriados.")
+                st.stop()
+
         registro_atual = db.obter_registro_diario(data_str, id_func)
 
         if registro_atual is None:
@@ -177,10 +184,21 @@ if menu == "Lançamento Diário":
                 tipo_lancamento = "🕐 Apenas Entrada (bater o ponto de chegada)"
 
             if tipo_lancamento == "🕐 Apenas Entrada (bater o ponto de chegada)":
-                entrada = st.time_input("Hora de Entrada", value=pd.to_datetime("08:00").time(), step=timedelta(minutes=1), key="time_ent_unica")
+                if eh_admin:
+                    entrada_padrao = pd.to_datetime("08:00").time()
+                else:
+                    # Usuário comum: sugere a hora atual de Brasília.
+                    entrada_padrao = rg.agora_brasilia().time().replace(second=0, microsecond=0)
+                entrada = st.time_input("Hora de Entrada", value=entrada_padrao, step=timedelta(minutes=1), key="time_ent_unica")
+
+                if not eh_admin:
+                    st.caption("🕐 A entrada deve ser registrada no horário atual de Brasília (tolerância de até 10 minutos).")
 
                 if st.button("✔️ Registrar Entrada", type="primary"):
-                    ok_hora, msg_hora = rg.validar_horario_nao_futuro(data_str, entrada.strftime('%H:%M'))
+                    if eh_admin:
+                        ok_hora, msg_hora = rg.validar_horario_nao_futuro(data_str, entrada.strftime('%H:%M'))
+                    else:
+                        ok_hora, msg_hora = rg.validar_entrada_horario_atual(data_str, entrada.strftime('%H:%M'))
                     if not ok_hora:
                         st.error(f"❌ {msg_hora}")
                     elif db.registrar_entrada(data_str, id_func, entrada.strftime('%H:%M')):
