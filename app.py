@@ -211,29 +211,18 @@ if menu == "Lançamento Diário":
                     )
                     if not ok_hora:
                         st.error(f"❌ {msg_hora}")
-                    elif ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
-                        # Verificar com a senha correta
-                        is_feriado = db.verificar_feriado(data_str)
-                        ent_str = entrada.strftime('%H:%M')
-                        sai_str = saida.strftime('%H:%M')
-                        saldo, desc_almoco = rg.calcular_saldo(ent_str, sai_str, data_str, is_feriado, ignorar_almoco)
-                        if db.registrar_ponto(data_str, id_func, ent_str, sai_str, saldo, desc_almoco, False):
-                            st.success(f"✅ Salvo! Saldo: {saldo} horas")
-                            st.rerun()
-                        else:
-                            st.error("❌ Erro ao salvar.")
-                    elif not ignorar_almoco:
-                        is_feriado = db.verificar_feriado(data_str)
-                        ent_str = entrada.strftime('%H:%M')
-                        sai_str = saida.strftime('%H:%M')
-                        saldo, desc_almoco = rg.calcular_saldo(ent_str, sai_str, data_str, is_feriado, ignorar_almoco)
-                        if db.registrar_ponto(data_str, id_func, ent_str, sai_str, saldo, desc_almoco, False):
-                            st.success(f"✅ Salvo! Saldo: {saldo} horas")
-                            st.rerun()
-                        else:
-                            st.error("❌ Erro ao salvar.")
+                    elif ignorar_almoco and not db.autenticar_usuario(st.session_state["usuario_logado"], senha_digitada)[0]:
+                        st.error("❌ Senha incorreta! Informe a sua senha para ignorar o desconto de almoço.")
                     else:
-                        st.error("❌ Senha obrigatória para ignorar almoço!")
+                        is_feriado = db.verificar_feriado(data_str)
+                        ent_str = entrada.strftime('%H:%M')
+                        sai_str = saida.strftime('%H:%M')
+                        saldo, desc_almoco = rg.calcular_saldo(ent_str, sai_str, data_str, is_feriado, ignorar_almoco)
+                        if db.registrar_ponto(data_str, id_func, ent_str, sai_str, saldo, desc_almoco, False):
+                            st.success(f"✅ Salvo! Saldo: {saldo} horas")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao salvar.")
 
             elif tipo_lancamento == "❌ Falta Injustificada (-8 horas)":
                 st.warning("⚠️ Esta ação registrará uma falta injustificada (-8 horas).")
@@ -273,8 +262,8 @@ if menu == "Lançamento Diário":
                     ok_hora, msg_hora = rg.validar_horario_nao_futuro(data_str, saida.strftime('%H:%M'))
                     if not ok_hora:
                         st.error(f"❌ {msg_hora}")
-                    elif ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
-                        st.error("❌ Senha obrigatória para ignorar almoço!")
+                    elif ignorar_almoco and not db.autenticar_usuario(st.session_state["usuario_logado"], senha_digitada)[0]:
+                        st.error("❌ Senha incorreta! Informe a sua senha para ignorar o desconto de almoço.")
                     else:
                         is_feriado = db.verificar_feriado(data_str)
                         sai_str = saida.strftime('%H:%M')
