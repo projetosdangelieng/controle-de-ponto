@@ -148,7 +148,8 @@ if menu == "Lançamento Diário":
         with col2:
             data_registro = st.date_input(
                 "📅 Data do Registro",
-                date.today(),
+                rg.hoje_brasilia(),
+                max_value=rg.hoje_brasilia(),
                 key="data_registro"
             )
 
@@ -179,7 +180,10 @@ if menu == "Lançamento Diário":
                 entrada = st.time_input("Hora de Entrada", value=pd.to_datetime("08:00").time(), step=timedelta(minutes=1), key="time_ent_unica")
 
                 if st.button("✔️ Registrar Entrada", type="primary"):
-                    if db.registrar_entrada(data_str, id_func, entrada.strftime('%H:%M')):
+                    ok_hora, msg_hora = rg.validar_horario_nao_futuro(data_str, entrada.strftime('%H:%M'))
+                    if not ok_hora:
+                        st.error(f"❌ {msg_hora}")
+                    elif db.registrar_entrada(data_str, id_func, entrada.strftime('%H:%M')):
                         st.success("✅ Entrada registrada com sucesso!")
                         st.rerun()
                     else:
@@ -202,7 +206,12 @@ if menu == "Lançamento Diário":
                     senha_digitada = ""
 
                 if st.button("💾 Salvar Ponto Completo", type="primary"):
-                    if ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
+                    ok_hora, msg_hora = rg.validar_horario_nao_futuro(
+                        data_str, entrada.strftime('%H:%M'), saida.strftime('%H:%M')
+                    )
+                    if not ok_hora:
+                        st.error(f"❌ {msg_hora}")
+                    elif ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
                         # Verificar com a senha correta
                         is_feriado = db.verificar_feriado(data_str)
                         ent_str = entrada.strftime('%H:%M')
@@ -261,7 +270,10 @@ if menu == "Lançamento Diário":
                     senha_digitada = ""
 
                 if st.button("✔️ Registrar Saída", type="primary"):
-                    if ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
+                    ok_hora, msg_hora = rg.validar_horario_nao_futuro(data_str, saida.strftime('%H:%M'))
+                    if not ok_hora:
+                        st.error(f"❌ {msg_hora}")
+                    elif ignorar_almoco and not db.verificar_senha(senha_digitada, db.hash_senha("admin123")):
                         st.error("❌ Senha obrigatória para ignorar almoço!")
                     else:
                         is_feriado = db.verificar_feriado(data_str)
@@ -308,20 +320,26 @@ if menu == "Lançamento Diário":
 
                     if col_btn1.button("💾 Salvar Correção", type="primary", use_container_width=True):
                         # Verificação simplificada (em produção, usar bcrypt)
-                        if nova_falta:
-                            saldo_edit, desc_almoco_edit = -8.0, False
-                            ent_edit, sai_edit = "", ""
+                        ok_hora, msg_hora = (True, "") if nova_falta else rg.validar_horario_nao_futuro(
+                            data_str, nova_entrada.strftime('%H:%M'), nova_saida.strftime('%H:%M')
+                        )
+                        if not ok_hora:
+                            st.error(f"❌ {msg_hora}")
                         else:
-                            is_feriado = db.verificar_feriado(data_str)
-                            ent_edit = nova_entrada.strftime('%H:%M')
-                            sai_edit = nova_saida.strftime('%H:%M')
-                            saldo_edit, desc_almoco_edit = rg.calcular_saldo(ent_edit, sai_edit, data_str, is_feriado, ign_almoco_edit)
+                            if nova_falta:
+                                saldo_edit, desc_almoco_edit = -8.0, False
+                                ent_edit, sai_edit = "", ""
+                            else:
+                                is_feriado = db.verificar_feriado(data_str)
+                                ent_edit = nova_entrada.strftime('%H:%M')
+                                sai_edit = nova_saida.strftime('%H:%M')
+                                saldo_edit, desc_almoco_edit = rg.calcular_saldo(ent_edit, sai_edit, data_str, is_feriado, ign_almoco_edit)
 
-                        if db.atualizar_ponto_completo(data_str, id_func, ent_edit, sai_edit, saldo_edit, desc_almoco_edit, nova_falta):
-                            st.success("✅ Registro corrigido!")
-                            st.rerun()
-                        else:
-                            st.error("❌ Erro ao corrigir.")
+                            if db.atualizar_ponto_completo(data_str, id_func, ent_edit, sai_edit, saldo_edit, desc_almoco_edit, nova_falta):
+                                st.success("✅ Registro corrigido!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Erro ao corrigir.")
 
                     if col_btn2.button("🗑️ Excluir Registro", type="secondary", use_container_width=True):
                         if db.excluir_ponto(data_str, id_func):
@@ -346,7 +364,7 @@ elif menu == "Ajustes e Saques":
             func_ajuste = st.selectbox("👤 Funcionário", funcionarios_df['nome'].tolist(), key="select_ajuste")
 
         with col2:
-            data_ajuste = st.date_input("📅 Data", date.today(), key="data_ajuste")
+            data_ajuste = st.date_input("📅 Data", rg.hoje_brasilia(), key="data_ajuste")
 
         valor_ajuste = st.number_input(
             "💵 Valor em Horas (negativo para debitar, positivo para creditar)",
@@ -412,9 +430,9 @@ elif menu == "Relatórios e Exportação":
         else:
             col_data1, col_data2 = st.columns(2)
             with col_data1:
-                data_inicio = st.date_input("📅 De:", date.today() - timedelta(days=30), key="data_ini")
+                data_inicio = st.date_input("📅 De:", rg.hoje_brasilia() - timedelta(days=30), key="data_ini")
             with col_data2:
-                data_fim = st.date_input("📅 Até:", date.today(), key="data_fim")
+                data_fim = st.date_input("📅 Até:", rg.hoje_brasilia(), key="data_fim")
 
         data_inicio_str = data_inicio.strftime('%Y-%m-%d')
         data_fim_str = data_fim.strftime('%Y-%m-%d')
