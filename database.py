@@ -219,7 +219,8 @@ def inicializar_banco():
     c.execute("""
         CREATE TABLE IF NOT EXISTS funcionarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT UNIQUE NOT NULL
+            nome TEXT UNIQUE NOT NULL,
+            carga_horaria REAL NOT NULL DEFAULT 8.0
         )
     """)
 
@@ -265,6 +266,12 @@ def inicializar_banco():
     colunas_usuarios = [col[1] for col in c.fetchall()]
     if 'id_funcionario' not in colunas_usuarios:
         c.execute("ALTER TABLE usuarios ADD COLUMN id_funcionario INTEGER REFERENCES funcionarios(id)")
+
+    # Migração: carga horária diária por funcionário (padrão 8h para os existentes).
+    c.execute("PRAGMA table_info(funcionarios)")
+    colunas_func = [col[1] for col in c.fetchall()]
+    if 'carga_horaria' not in colunas_func:
+        c.execute("ALTER TABLE funcionarios ADD COLUMN carga_horaria REAL NOT NULL DEFAULT 8.0")
 
     # Verificar se há usuário admin, se não houver criar um padrão de emergência
     # (isso só deve acontecer se todos os administradores forem removidos)
@@ -408,11 +415,11 @@ def redefinir_senha_admin(username_alvo, nova_senha):
 
 # ============= FUNÇÕES DE FUNCIONÁRIOS =============
 
-def adicionar_funcionario(nome):
-    """Adiciona um novo funcionário."""
+def adicionar_funcionario(nome, carga_horaria=8.0):
+    """Adiciona um novo funcionário com sua carga horária diária (em horas)."""
     conn = conectar()
     try:
-        conn.execute("INSERT INTO funcionarios (nome) VALUES (?)", (nome,))
+        conn.execute("INSERT INTO funcionarios (nome, carga_horaria) VALUES (?, ?)", (nome, float(carga_horaria)))
         conn.commit()
         _limpar_cache(listar_funcionarios)
         return True
@@ -427,6 +434,44 @@ def listar_funcionarios():
     ao adicionar/remover funcionário) — é a consulta mais repetida do app,
     chamada em praticamente toda tela."""
     return _query_df("SELECT * FROM funcionarios ORDER BY nome")
+
+def atualizar_carga_horaria(id_funcionario, carga_horaria):
+    """
+    Altera a carga horária diária do funcionário e RECALCULA o saldo de todos
+    os registros dele já lançados (dias completos e faltas injustificadas).
+    Retorna (ok, qtd_registros_recalculados).
+    """
+    import regras as rg
+    carga = float(carga_horaria)
+    conn = conectar()
+    try:
+        conn.execute("UPDATE funcionarios SET carga_horaria = ? WHERE id = ?", (carga, id_funcionario))
+        feriados = set(listar_feriados()['data'].astype(str).tolist()) if not listar_feriados().empty else set()
+        cur = conn.execute(
+            "SELECT id, data, entrada, saida, descontou_almoco, falta_injustificada FROM registros WHERE id_funcionario = ?",
+            (id_funcionario,))
+        qtd = 0
+        for reg_id, data, ent, sai, desc_alm, falta in cur.fetchall():
+            if falta:
+                novo, novo_desc = -carga, False
+            elif ent and sai:
+                # Se o almoço não foi descontado num turno longo, foi ignorado de propósito: preserva isso.
+                h1, m1 = map(int, ent.split(':')); h2, m2 = map(int, sai.split(':'))
+                span = (h2 * 60 + m2) - (h1 * 60 + m1)
+                ignorar = (not desc_alm) and span > 360
+                novo, novo_desc = rg.calcular_saldo(ent, sai, str(data), str(data) in feriados, ignorar, carga)
+            else:
+                continue
+            conn.execute("UPDATE registros SET saldo_decimal = ?, descontou_almoco = ? WHERE id = ?",
+                         (novo, 1 if novo_desc else 0, reg_id))
+            qtd += 1
+        conn.commit()
+        _limpar_cache(listar_funcionarios)
+        return True, qtd
+    except Exception:
+        return False, 0
+    finally:
+        conn.close()
 
 def deletar_funcionario(id_funcionario):
     """Deleta um funcionário e seus registros."""

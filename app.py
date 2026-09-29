@@ -154,6 +154,8 @@ if menu == "Lançamento Diário":
             )
 
         data_str = data_registro.strftime('%Y-%m-%d')
+        carga_func = float(funcionarios_df.loc[funcionarios_df['id'] == id_func, 'carga_horaria'].values[0])
+        carga_txt = f"{carga_func:g}"
 
         # Usuários comuns não lançam ponto em sábados, domingos e feriados.
         if not eh_admin:
@@ -174,7 +176,7 @@ if menu == "Lançamento Diário":
                     [
                         "🕐 Apenas Entrada (bater o ponto de chegada)",
                         "✅ Ponto Completo (lançar retroativo)",
-                        "❌ Falta Injustificada (-8 horas)"
+                        f"❌ Falta Injustificada (-{carga_txt} horas)"
                     ],
                     key="tipo_lanc"
                 )
@@ -235,18 +237,18 @@ if menu == "Lançamento Diário":
                         is_feriado = db.verificar_feriado(data_str)
                         ent_str = entrada.strftime('%H:%M')
                         sai_str = saida.strftime('%H:%M')
-                        saldo, desc_almoco = rg.calcular_saldo(ent_str, sai_str, data_str, is_feriado, ignorar_almoco)
+                        saldo, desc_almoco = rg.calcular_saldo(ent_str, sai_str, data_str, is_feriado, ignorar_almoco, carga_func)
                         if db.registrar_ponto(data_str, id_func, ent_str, sai_str, saldo, desc_almoco, False):
                             st.success(f"✅ Salvo! Saldo: {saldo} horas")
                             st.rerun()
                         else:
                             st.error("❌ Erro ao salvar.")
 
-            elif tipo_lancamento == "❌ Falta Injustificada (-8 horas)":
-                st.warning("⚠️ Esta ação registrará uma falta injustificada (-8 horas).")
+            elif tipo_lancamento == f"❌ Falta Injustificada (-{carga_txt} horas)":
+                st.warning(f"⚠️ Esta ação registrará uma falta injustificada (-{carga_txt} horas).")
 
                 if st.button("Confirmar Falta", type="primary"):
-                    if db.registrar_ponto(data_str, id_func, "", "", -8.0, False, True):
+                    if db.registrar_ponto(data_str, id_func, "", "", -carga_func, False, True):
                         st.success("✅ Falta registrada!")
                         st.rerun()
                     else:
@@ -285,7 +287,7 @@ if menu == "Lançamento Diário":
                     else:
                         is_feriado = db.verificar_feriado(data_str)
                         sai_str = saida.strftime('%H:%M')
-                        saldo, desc_almoco = rg.calcular_saldo(entrada_bd, sai_str, data_str, is_feriado, ignorar_almoco)
+                        saldo, desc_almoco = rg.calcular_saldo(entrada_bd, sai_str, data_str, is_feriado, ignorar_almoco, carga_func)
 
                         if db.registrar_saida(data_str, id_func, sai_str, saldo, desc_almoco):
                             st.success(f"✅ Ponto fechado! Saldo: {saldo} horas")
@@ -316,7 +318,7 @@ if menu == "Lançamento Diário":
                     with col_edit2:
                         nova_saida = st.time_input("Corrigir Saída", value=def_sai, step=timedelta(minutes=1), key="edit_sai")
 
-                    nova_falta = st.checkbox("Converter em Falta Injustificada (-8h)", value=bool(falta_bd), key="edit_falta")
+                    nova_falta = st.checkbox(f"Converter em Falta Injustificada (-{carga_txt}h)", value=bool(falta_bd), key="edit_falta")
                     ign_almoco_edit = st.checkbox("Ignorar almoço na correção", key="edit_almoco")
 
                     st.divider()
@@ -334,13 +336,13 @@ if menu == "Lançamento Diário":
                             st.error(f"❌ {msg_hora}")
                         else:
                             if nova_falta:
-                                saldo_edit, desc_almoco_edit = -8.0, False
+                                saldo_edit, desc_almoco_edit = -carga_func, False
                                 ent_edit, sai_edit = "", ""
                             else:
                                 is_feriado = db.verificar_feriado(data_str)
                                 ent_edit = nova_entrada.strftime('%H:%M')
                                 sai_edit = nova_saida.strftime('%H:%M')
-                                saldo_edit, desc_almoco_edit = rg.calcular_saldo(ent_edit, sai_edit, data_str, is_feriado, ign_almoco_edit)
+                                saldo_edit, desc_almoco_edit = rg.calcular_saldo(ent_edit, sai_edit, data_str, is_feriado, ign_almoco_edit, carga_func)
 
                             if db.atualizar_ponto_completo(data_str, id_func, ent_edit, sai_edit, saldo_edit, desc_almoco_edit, nova_falta):
                                 st.success("✅ Registro corrigido!")
@@ -610,9 +612,11 @@ elif menu == "Configurações":
 
         novo_func = st.text_input("Nome do Funcionário", key="input_novo_func", placeholder="Ex: João Silva")
 
+        nova_carga = st.number_input("Carga horária diária (horas)", min_value=1.0, max_value=12.0, value=8.0, step=0.5, key="input_nova_carga")
+
         if st.button("✔️ Adicionar Funcionário", type="primary", use_container_width=True):
             if novo_func.strip():
-                if db.adicionar_funcionario(novo_func):
+                if db.adicionar_funcionario(novo_func, nova_carga):
                     st.success(f"✅ '{novo_func}' adicionado com sucesso!")
                     st.rerun()
                 else:
@@ -634,6 +638,22 @@ elif menu == "Configurações":
                 st.markdown("**Ações:**")
                 if st.button("🗑️ Remover Selecionado", type="secondary", use_container_width=True):
                     st.info("Selecione um funcionário e confirme a exclusão.")
+
+            st.divider()
+            st.subheader("⏱️ Alterar Carga Horária")
+            st.caption("Ao salvar, os saldos de todos os registros já lançados desse funcionário são recalculados.")
+            c1, c2 = st.columns(2)
+            f_sel = c1.selectbox("Funcionário", funcionarios_df['nome'].tolist(), key="carga_func_sel")
+            atual = float(funcionarios_df.loc[funcionarios_df['nome'] == f_sel, 'carga_horaria'].values[0])
+            nova = c2.number_input("Nova carga diária (horas)", min_value=1.0, max_value=12.0, value=atual, step=0.5, key=f"carga_nova_{f_sel}")
+            if st.button("💾 Salvar Carga Horária e Recalcular", type="primary", use_container_width=True):
+                id_f = int(funcionarios_df.loc[funcionarios_df['nome'] == f_sel, 'id'].values[0])
+                ok, qtd = db.atualizar_carga_horaria(id_f, nova)
+                if ok:
+                    st.success(f"✅ Carga de {f_sel}: {nova:g}h/dia. {qtd} registro(s) recalculado(s).")
+                    st.rerun()
+                else:
+                    st.error("❌ Erro ao atualizar a carga horária.")
         else:
             st.info("ℹ️ Nenhum funcionário cadastrado.")
 
@@ -739,10 +759,10 @@ elif menu == "Configurações":
         - ✅ Autenticação multi-usuário
 
         #### 📋 Regras de Cálculo:
-        - **Segunda a Sexta:** 1x (meta: 8h)
+        - **Segunda a Sexta:** 1x (meta: a carga horária de cada funcionário, 8h por padrão)
         - **Sábado:** 1.7x (meta: 0h)
         - **Domingo/Feriado:** 2x (meta: 0h)
-        - **Almoço:** Desconto automático de 1h se intervalo > 6h
+        - **Almoço:** Desconto automático de 1h se intervalo > 6h (apenas para carga horária acima de 6h)
 
         #### 💡 Dicas:
         - Guarde as senhas dos usuários em local seguro
