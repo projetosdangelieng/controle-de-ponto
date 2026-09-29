@@ -108,8 +108,8 @@ def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_a
     """
     Calcula o saldo de horas decimais do dia baseado nas regras de negócio estabelecidas.
     carga_horaria: meta diária do funcionário em horas (8h padrão; 6h etc.).
-    O desconto automático de 1h de almoço só vale para cargas acima de 6h —
-    quem trabalha 6h corridas não tem intervalo de almoço.
+    O desconto automático de 1h de almoço vale para todos: se a permanência
+    passar de 6h, desconta 1h de intervalo, qualquer que seja a carga horária.
     """
     fmt_hora = '%H:%M'
     t_entrada = datetime.strptime(entrada_str, fmt_hora)
@@ -119,7 +119,7 @@ def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_a
     
     # Regra do Almoço: Desconta 1h se intervalo > 6h (360 min) e não houve exceção
     descontou_almoco = False
-    if not ignorar_almoco and carga_horaria > 6 and diff_minutos > 360:
+    if not ignorar_almoco and diff_minutos > 360:
         diff_minutos -= 60
         descontou_almoco = True
         

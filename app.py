@@ -762,7 +762,7 @@ elif menu == "Configurações":
         - **Segunda a Sexta:** 1x (meta: a carga horária de cada funcionário, 8h por padrão)
         - **Sábado:** 1.7x (meta: 0h)
         - **Domingo/Feriado:** 2x (meta: 0h)
-        - **Almoço:** Desconto automático de 1h se intervalo > 6h (apenas para carga horária acima de 6h)
+        - **Almoço:** Desconto automático de 1h se intervalo > 6h
 
         #### 💡 Dicas:
         - Guarde as senhas dos usuários em local seguro
