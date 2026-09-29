@@ -27,12 +27,43 @@ st.set_page_config(
 # TODA tela — a principal causa da lentidão. Com st.cache_resource, a função
 # roda de fato uma única vez por instância do app (fica em cache entre
 # reruns e entre usuários), e não mais a cada interação.
+COLUNAS_FUNCIONARIOS = (
+    ("carga_horaria", "REAL NOT NULL DEFAULT 8.0"),
+    ("salario", "REAL NOT NULL DEFAULT 0"),
+    ("divisor_horas", "REAL"),
+)
+
+
+def _migrar_colunas_funcionarios():
+    """Cria as colunas novas da tabela funcionarios se faltarem. Fica aqui no
+    app.py (e não só no database.py) para funcionar mesmo que o app esteja
+    rodando uma versão antiga do database.py em memória após um deploy."""
+    conn = db.conectar()
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(funcionarios)").fetchall()]
+    for nome, tipo in COLUNAS_FUNCIONARIOS:
+        if nome not in cols:
+            conn.execute(f"ALTER TABLE funcionarios ADD COLUMN {nome} {tipo}")
+    conn.close()
+    getattr(db.listar_funcionarios, "clear", lambda: None)()
+
+
 @st.cache_resource
-def _inicializar_banco_uma_vez(versao_schema=2):
+def _inicializar_banco_uma_vez(versao_schema=3):
     # versao_schema: mude o número ao alterar o banco, para invalidar o cache
     # e forçar a migração mesmo sem reiniciar o app.
     db.inicializar_banco()
+    _migrar_colunas_funcionarios()
     return True
+
+
+def _listar_funcionarios():
+    """db.listar_funcionarios() garantindo as colunas novas (com valores padrão),
+    para nenhuma tela quebrar por coluna ausente."""
+    df = db.listar_funcionarios().copy()
+    for nome, padrao in (("carga_horaria", 8.0), ("salario", 0.0), ("divisor_horas", None)):
+        if nome not in df.columns:
+            df[nome] = padrao
+    return df
 
 _inicializar_banco_uma_vez()
 
@@ -133,7 +164,7 @@ with st.sidebar:
 if menu == "Lançamento Diário":
     st.header("📋 Registro de Ponto")
 
-    funcionarios_df = db.listar_funcionarios()
+    funcionarios_df = _listar_funcionarios()
 
     if funcionarios_df.empty:
         st.warning("⚠️ Nenhum funcionário cadastrado. Vá para 'Configurações' para adicionar.")
@@ -376,7 +407,7 @@ elif menu == "Ajustes e Saques":
     st.header("💰 Ajustes Manuais e Saques")
     st.info("Use esta tela para abater horas pagas ou adicionar saldos iniciais.")
 
-    funcionarios_df = db.listar_funcionarios()
+    funcionarios_df = _listar_funcionarios()
 
     if funcionarios_df.empty:
         st.warning("⚠️ Cadastre funcionários primeiro.")
@@ -414,7 +445,7 @@ elif menu == "Ajustes e Saques":
 elif menu == "Relatórios e Exportação":
     st.header("📊 Relatórios e Exportação")
 
-    funcionarios_df = db.listar_funcionarios()
+    funcionarios_df = _listar_funcionarios()
 
     if not funcionarios_df.empty:
         # === FILTROS ===
@@ -681,7 +712,7 @@ elif menu == "Configurações":
         st.divider()
         st.subheader("📋 Funcionários Ativos")
 
-        funcionarios_df = db.listar_funcionarios()
+        funcionarios_df = _listar_funcionarios()
         if not funcionarios_df.empty:
             col_func, col_acao = st.columns([3, 1])
 
@@ -748,7 +779,7 @@ elif menu == "Configurações":
                 novo_usuario = st.text_input("Username", key="novo_usuario", placeholder="ex: joao.silva")
                 nova_senha = st.text_input("Senha", type="password", key="nova_senha")
 
-                funcionarios_df_novo_user = db.listar_funcionarios()
+                funcionarios_df_novo_user = _listar_funcionarios()
                 opcoes_vinculo = ["🔧 Nenhum (acesso administrativo)"] + funcionarios_df_novo_user['nome'].tolist()
                 vinculo_func = st.selectbox(
                     "Vincular a um Funcionário",
