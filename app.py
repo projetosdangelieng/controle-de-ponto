@@ -36,6 +36,18 @@ def _inicializar_banco_uma_vez(versao_schema=2):
 
 _inicializar_banco_uma_vez()
 
+def _brl(valor, prefixo="", sufixo=""):
+    """Formata um número como moeda brasileira: R$ 1.234,56."""
+    txt = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"{prefixo}R$ {txt}{sufixo}"
+
+
+def _feriados_set():
+    """Conjunto de datas de feriados cadastradas ('AAAA-MM-DD')."""
+    df_fer = db.listar_feriados()
+    return set(df_fer['data'].astype(str).tolist()) if not df_fer.empty else set()
+
+
 # === SISTEMA DE LOGIN ===
 if "usuario_logado" not in st.session_state:
     st.session_state["usuario_logado"] = None
@@ -464,10 +476,8 @@ elif menu == "Relatórios e Exportação":
             if dict_funcionarios:
                 # Tabela resumida
                 ver_valores = st.session_state["eh_admin"]  # salário só aparece para administradores
-                valores_hora = {
-                    r['nome']: rg.valor_hora(r['salario'], r['carga_horaria'], r['divisor_horas'])
-                    for _, r in funcionarios_df.iterrows()
-                } if ver_valores else None
+                feriados_rel = _feriados_set() if ver_valores else set()
+                valores_totais = {}
 
                 resumo_data = []
                 for func_nome, df_ext in dict_funcionarios.items():
@@ -478,17 +488,23 @@ elif menu == "Relatórios e Exportação":
                         "Movimentações": len(df_ext)
                     }
                     if ver_valores:
-                        linha_resumo["Valor (R$)"] = round(saldo * valores_hora.get(func_nome, 0), 2)
+                        rf = funcionarios_df.loc[funcionarios_df['nome'] == func_nome].iloc[0]
+                        total_rs = sum(rg.valores_por_movimento(
+                            df_ext['Data'], df_ext['Movimentacao'],
+                            rf['salario'], rf['carga_horaria'], rf['divisor_horas'], feriados_rel))
+                        valores_totais[func_nome] = round(total_rs, 2)
+                        linha_resumo["Valor (R$)"] = round(total_rs, 2)
                     resumo_data.append(linha_resumo)
 
                 df_resumo = pd.DataFrame(resumo_data)
                 cfg_resumo = {"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")} if ver_valores else None
                 st.dataframe(df_resumo, use_container_width=True, hide_index=True, column_config=cfg_resumo)
-                if ver_valores and any(v == 0 for v in valores_hora.values()):
-                    st.caption("ℹ️ Funcionários com salário não informado aparecem com R$ 0,00.")
+                if ver_valores:
+                    st.caption("💵 Cada lançamento é valorizado pelo valor da hora do mês da sua data. "
+                               "Funcionários sem salário cadastrado aparecem com R$ 0,00.")
 
                 # Botão para exportar consolidado
-                dados_excel, nome_excel = ut.exportar_relatorio_consolidado_excel(dict_funcionarios, valores_hora)
+                dados_excel, nome_excel = ut.exportar_relatorio_consolidado_excel(dict_funcionarios, valores_totais if ver_valores else None)
                 st.download_button(
                     label="📥 Baixar Relatório Consolidado (Excel)",
                     data=dados_excel,
@@ -510,26 +526,29 @@ elif menu == "Relatórios e Exportação":
                 df_extrato_display = df_extrato.copy()
                 df_extrato_display['Saldo Acumulado'] = df_extrato_display['Movimentacao'].cumsum()
 
-                # Valor em R$ (apenas administradores)
-                vh_rel = None
+                # Valor em R$ (apenas administradores): cada linha usa o valor da hora do seu mês
+                com_valor = False
                 if st.session_state["eh_admin"]:
                     linha_rel = funcionarios_df.loc[funcionarios_df['id'] == id_func_rel].iloc[0]
-                    vh_rel = rg.valor_hora(linha_rel['salario'], linha_rel['carga_horaria'], linha_rel['divisor_horas'])
-                    if vh_rel > 0:
-                        df_extrato_display['Valor (R$)'] = (df_extrato_display['Movimentacao'] * vh_rel).round(2)
+                    if float(linha_rel['salario'] or 0) > 0:
+                        valores_rs = rg.valores_por_movimento(
+                            df_extrato['Data'], df_extrato['Movimentacao'],
+                            linha_rel['salario'], linha_rel['carga_horaria'], linha_rel['divisor_horas'], _feriados_set())
+                        df_extrato_display['Valor (R$)'] = valores_rs
+                        df_extrato = df_extrato.copy()
+                        df_extrato['Valor (R$)'] = valores_rs
+                        com_valor = True
                     else:
-                        vh_rel = None
                         st.warning("⚠️ Salário não informado para este funcionário. Cadastre em Configurações > Funcionários para ver o valor em R$.")
 
                 # Métrica do saldo
                 saldo_atual = db.obter_saldo_atual(id_func_rel)
                 cor_saldo = "off" if saldo_atual >= 0 else "inverse"
-                if vh_rel:
+                if com_valor:
                     col_m1, col_m2 = st.columns(2)
                     col_m1.metric(label="💰 Saldo Atual", value=f"{saldo_atual:.2f} h", delta_color=cor_saldo)
-                    valor_saldo = f"R$ {saldo_atual * vh_rel:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    col_m2.metric(label="💵 Valor do Saldo Atual", value=valor_saldo,
-                                  help=f"Saldo × valor da hora (R$ {vh_rel:,.2f})")
+                    col_m2.metric(label="💵 Valor do Período Filtrado", value=_brl(sum(valores_rs)),
+                                  help="Soma do Valor (R$) das linhas abaixo; cada linha usa o valor da hora do mês da sua data.")
                 else:
                     st.metric(
                         label="💰 Saldo Atual",
@@ -556,8 +575,7 @@ elif menu == "Relatórios e Exportação":
                         df_extrato,
                         func_relatorio,
                         data_inicio_str,
-                        data_fim_str,
-                        vh_rel
+                        data_fim_str
                     )
                     st.download_button(
                         label="📥 Baixar como Excel",
@@ -569,10 +587,7 @@ elif menu == "Relatórios e Exportação":
                     )
 
                 with col_exp2:
-                    df_csv = df_extrato.copy()
-                    if vh_rel:
-                        df_csv['Valor (R$)'] = (df_csv['Movimentacao'] * vh_rel).round(2)
-                    csv = df_csv.to_csv(index=False).encode('utf-8')
+                    csv = df_extrato.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Baixar como CSV",
                         data=csv,
@@ -691,12 +706,19 @@ elif menu == "Configurações":
             nova = c1.number_input("Carga diária (horas)", min_value=1.0, max_value=12.0, value=atual, step=0.5, key=f"carga_nova_{f_sel}")
             novo_sal = c2.number_input("Salário mensal (R$)", min_value=0.0, value=sal_atual, step=100.0, format="%.2f", key=f"sal_novo_{f_sel}")
             novo_div = c3.number_input(
-                "Divisor mensal (0 = automático)", min_value=0.0, max_value=300.0, value=div_atual, step=1.0,
-                help="Horas do mês usadas para achar o valor da hora (salário ÷ divisor). Automático: carga diária × 25 (200 para 8h/dia = 40h/sem; 150 para 6h/dia = 30h/sem).",
+                "Divisor fixo em horas/mês (0 = automático)", min_value=0.0, max_value=300.0, value=div_atual, step=1.0,
+                help="Automático: valor da hora = salário ÷ (dias úteis do mês × carga diária), descontando os feriados cadastrados. "
+                     "Preencha só se quiser um divisor fixo (ex.: 176 = 22 dias × 8h).",
                 key=f"div_novo_{f_sel}")
-            vh_prev = rg.valor_hora(novo_sal, nova, novo_div)
-            div_usado = novo_div if novo_div > 0 else rg.divisor_padrao(nova)
-            st.info(f"💵 Valor da hora: **R$ {vh_prev:,.2f}** (salário ÷ {div_usado:g} h)".replace(",", "X").replace(".", ",").replace("X", "."))
+            hoje_cfg = rg.hoje_brasilia()
+            feriados_cfg = _feriados_set()
+            du_cfg = rg.dias_uteis_mes(hoje_cfg.year, hoje_cfg.month, feriados_cfg)
+            vh_prev = rg.valor_hora(novo_sal, nova, novo_div, du_cfg)
+            if novo_div > 0:
+                base_txt = f"salário ÷ {novo_div:g} h (divisor fixo)"
+            else:
+                base_txt = f"salário ÷ ({du_cfg} dias úteis × {nova:g}h) neste mês"
+            st.info(_brl(vh_prev, "💵 Valor da hora: **", "**") + f" ({base_txt})")
             if st.button("💾 Salvar Carga Horária e Salário", type="primary", use_container_width=True):
                 id_f = int(linha_f['id'])
                 ok_s = db.atualizar_salario(id_f, novo_sal, novo_div)
@@ -820,7 +842,7 @@ elif menu == "Configurações":
         - **Sábado:** 1.7x (meta: 0h)
         - **Domingo/Feriado:** 2x (meta: 0h)
         - **Almoço:** Desconto automático de 1h se intervalo > 6h
-        - **Valor em R$ (somente admin):** saldo em horas × valor da hora, onde valor da hora = salário ÷ divisor mensal (200 para 8h/dia = 40h/sem, 150 para 6h/dia = 30h/sem; ajustável por funcionário)
+        - **Valor em R$ (somente admin):** saldo em horas × valor da hora, onde valor da hora = salário ÷ (dias úteis do mês × carga diária), descontando feriados cadastrados; cada lançamento usa o mês da sua data. Opcionalmente, divisor fixo por funcionário
 
         #### 💡 Dicas:
         - Guarde as senhas dos usuários em local seguro

@@ -95,7 +95,7 @@ def exportar_backup_completo_excel(dict_tabelas):
     buffer.seek(0)
     return buffer.getvalue(), nome_arquivo
 
-def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, valor_hora=None):
+def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim):
     """
     Gera o extrato de um funcionário como um arquivo Excel formatado e profissional.
     Retorna (bytes_do_arquivo, nome_sugerido_do_arquivo) — pronto para um
@@ -113,8 +113,10 @@ def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, 
     ws.title = "Extrato"
 
     # === CABEÇALHO ===
-    ncols = 6 if valor_hora else 5   # coluna extra "Valor (R$)" só quando há valor da hora
-    ultima_col = "F" if valor_hora else "E"
+    # Coluna extra "Valor (R$)" só quando o extrato já traz os valores calculados
+    com_valor = 'Valor (R$)' in df_extrato.columns
+    ncols = 6 if com_valor else 5
+    ultima_col = "F" if com_valor else "E"
     ws.merge_cells(f"A1:{ultima_col}1")
     titulo = ws["A1"]
     titulo.value = "CONTROLE DE BANCO DE HORAS"
@@ -136,7 +138,7 @@ def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, 
 
     # === CABEÇALHO DA TABELA ===
     headers = ["Data", "Tipo", "Movimentação (h)", "Saldo Acumulado (h)", "Detalhes"]
-    if valor_hora:
+    if com_valor:
         headers.append("Valor (R$)")
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=4, column=col_num)
@@ -167,8 +169,8 @@ def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, 
             ws.cell(row=linha_atual, column=3).value = row['Movimentacao']
             ws.cell(row=linha_atual, column=4).value = row['Saldo Acumulado']
             ws.cell(row=linha_atual, column=5).value = row['Detalhe'] if 'Detalhe' in row else ""
-            if valor_hora:
-                ws.cell(row=linha_atual, column=6).value = round(row['Movimentacao'] * valor_hora, 2)
+            if com_valor:
+                ws.cell(row=linha_atual, column=6).value = row['Valor (R$)']
 
             # Aplicar formato e estilo
             for col_num in range(1, ncols + 1):
@@ -206,9 +208,9 @@ def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, 
         cell_saldo.number_format = '#,##0.00'
         cell_saldo.border = thin_border
 
-        if valor_hora:
+        if com_valor:
             cell_valor = ws.cell(row=linha_total, column=6)
-            cell_valor.value = round(saldo_final * valor_hora, 2)
+            cell_valor.value = round(float(df_extrato['Valor (R$)'].sum()), 2)
             cell_valor.font = Font(size=11, bold=True, color="FFFFFF")
             cell_valor.fill = PatternFill(start_color="203864", end_color="203864", fill_type="solid")
             cell_valor.alignment = Alignment(horizontal="center", vertical="center")
@@ -231,10 +233,11 @@ def exportar_extrato_excel(df_extrato, funcionario_nome, data_inicio, data_fim, 
     buffer.seek(0)
     return buffer.getvalue(), nome_arquivo
 
-def exportar_relatorio_consolidado_excel(dict_funcionarios, valores_hora=None):
+def exportar_relatorio_consolidado_excel(dict_funcionarios, valores_totais=None):
     """
     Gera um relatório consolidado de todos os funcionários como um arquivo Excel.
     dict_funcionarios: dicionário {nome_funcionario: dataframe_extrato}
+    valores_totais: opcional, {nome_funcionario: total em R$ do período} — adiciona a coluna "Valor (R$)".
     Retorna (bytes_do_arquivo, nome_sugerido_do_arquivo).
     """
 
@@ -260,7 +263,7 @@ def exportar_relatorio_consolidado_excel(dict_funcionarios, valores_hora=None):
 
     # === CABEÇALHO DA TABELA ===
     headers = ["Funcionário", "Saldo Total (h)", "Registros", "Ajustes", "Últimas Movimentações"]
-    if valores_hora:
+    if valores_totais:
         headers.append("Valor (R$)")
     linha = 4
     for col_num, header in enumerate(headers, 1):
@@ -293,10 +296,10 @@ def exportar_relatorio_consolidado_excel(dict_funcionarios, valores_hora=None):
             ws.cell(row=linha_dados, column=3).value = total_registros
             ws.cell(row=linha_dados, column=4).value = total_ajustes
             ws.cell(row=linha_dados, column=5).value = str(ultimas_mov)[:50]  # Primeiros 50 caracteres
-            if valores_hora:
-                ws.cell(row=linha_dados, column=6).value = round(saldo_total * valores_hora.get(funcionario, 0), 2)
+            if valores_totais:
+                ws.cell(row=linha_dados, column=6).value = round(valores_totais.get(funcionario, 0), 2)
 
-            for col_num in range(1, (6 if valores_hora else 5) + 1):
+            for col_num in range(1, (6 if valores_totais else 5) + 1):
                 cell = ws.cell(row=linha_dados, column=col_num)
                 cell.border = thin_border
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)

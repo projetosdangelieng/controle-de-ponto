@@ -145,26 +145,54 @@ def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_a
     return round(saldo_dia, 2), descontou_almoco
 
 
-def divisor_padrao(carga_horaria):
-    """
-    Divisor mensal de horas usado para achar o valor da hora a partir do salário.
-    Regra CLT: horas semanais x 5 (semana de 5 dias úteis + DSR).
-    Com jornada de segunda a sexta, horas semanais = carga diária x 5, então
-    divisor = carga diária x 25:  8h/dia (40h/sem) = 200;  6h/dia (30h/sem) = 150.
-    """
-    return round(float(carga_horaria) * 25.0, 2)
+def dias_uteis_mes(ano, mes, feriados=None):
+    """Dias úteis do mês: segunda a sexta, descontando os feriados informados
+    (conjunto de strings 'AAAA-MM-DD')."""
+    import calendar
+    feriados = feriados or set()
+    total = 0
+    for dia in range(1, calendar.monthrange(ano, mes)[1] + 1):
+        d = datetime(ano, mes, dia)
+        if d.weekday() < 5 and d.strftime('%Y-%m-%d') not in feriados:
+            total += 1
+    return total
 
 
-def valor_hora(salario, carga_horaria, divisor=None):
-    """Valor da hora normal em R$ = salário / divisor (padrão conforme a carga)."""
+def valor_hora(salario, carga_horaria, divisor=None, dias_uteis=None):
+    """
+    Valor da hora normal em R$ (contrato de prestador/MEI, sem descanso remunerado):
+      - divisor fixo informado (> 0):  salário / divisor
+      - senão:  salário / (dias úteis do mês x carga horária diária)
+    """
     try:
         salario = float(salario or 0)
     except (TypeError, ValueError):
+        return 0.0
+    if salario <= 0:
         return 0.0
     try:
         div = float(divisor) if divisor is not None else 0.0
     except (TypeError, ValueError):
         div = 0.0
     if not div or div != div or div <= 0:  # None, 0, NaN ou negativo -> automático
-        div = divisor_padrao(carga_horaria)
-    return round(salario / div, 4) if salario > 0 else 0.0
+        if not dias_uteis:
+            return 0.0
+        div = float(dias_uteis) * float(carga_horaria)
+    return round(salario / div, 4)
+
+
+def valores_por_movimento(datas, movimentos, salario, carga_horaria, divisor=None, feriados=None):
+    """
+    Converte cada movimentação (horas) em R$, usando o valor da hora do MÊS
+    da própria data. Retorna lista de floats (mesma ordem de entrada).
+    """
+    feriados = feriados or set()
+    cache = {}
+    saida = []
+    for data, mov in zip(datas, movimentos):
+        chave = str(data)[:7]
+        if chave not in cache:
+            ano, mes = int(chave[:4]), int(chave[5:7])
+            cache[chave] = valor_hora(salario, carga_horaria, divisor, dias_uteis_mes(ano, mes, feriados))
+        saida.append(round(float(mov) * cache[chave], 2))
+    return saida
