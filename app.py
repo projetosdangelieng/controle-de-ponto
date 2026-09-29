@@ -28,7 +28,9 @@ st.set_page_config(
 # roda de fato uma única vez por instância do app (fica em cache entre
 # reruns e entre usuários), e não mais a cada interação.
 @st.cache_resource
-def _inicializar_banco_uma_vez():
+def _inicializar_banco_uma_vez(versao_schema=2):
+    # versao_schema: mude o número ao alterar o banco, para invalidar o cache
+    # e forçar a migração mesmo sem reiniciar o app.
     db.inicializar_banco()
     return True
 

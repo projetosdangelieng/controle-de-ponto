@@ -428,12 +428,27 @@ def adicionar_funcionario(nome, carga_horaria=8.0):
     finally:
         conn.close()
 
+def _garantir_coluna_carga_horaria():
+    """Cria a coluna carga_horaria (padrão 8h) se ainda não existir. Idempotente."""
+    conn = conectar()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(funcionarios)").fetchall()]
+        if 'carga_horaria' not in cols:
+            conn.execute("ALTER TABLE funcionarios ADD COLUMN carga_horaria REAL NOT NULL DEFAULT 8.0")
+    finally:
+        conn.close()
+
 @_cache_data(ttl=30)
 def listar_funcionarios():
     """Lista todos os funcionários. Cacheado por 30s (invalidado explicitamente
     ao adicionar/remover funcionário) — é a consulta mais repetida do app,
     chamada em praticamente toda tela."""
-    return _query_df("SELECT * FROM funcionarios ORDER BY nome")
+    df = _query_df("SELECT * FROM funcionarios ORDER BY nome")
+    if 'carga_horaria' not in df.columns:
+        # Banco criado antes da carga horária por funcionário: migra na hora.
+        _garantir_coluna_carga_horaria()
+        df = _query_df("SELECT * FROM funcionarios ORDER BY nome")
+    return df
 
 def atualizar_carga_horaria(id_funcionario, carga_horaria):
     """
