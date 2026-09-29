@@ -463,20 +463,32 @@ elif menu == "Relatórios e Exportação":
 
             if dict_funcionarios:
                 # Tabela resumida
+                ver_valores = st.session_state["eh_admin"]  # salário só aparece para administradores
+                valores_hora = {
+                    r['nome']: rg.valor_hora(r['salario'], r['carga_horaria'], r['divisor_horas'])
+                    for _, r in funcionarios_df.iterrows()
+                } if ver_valores else None
+
                 resumo_data = []
                 for func_nome, df_ext in dict_funcionarios.items():
                     saldo = df_ext['Movimentacao'].sum()
-                    resumo_data.append({
+                    linha_resumo = {
                         "Funcionário": func_nome,
                         "Saldo Total (h)": round(saldo, 2),
                         "Movimentações": len(df_ext)
-                    })
+                    }
+                    if ver_valores:
+                        linha_resumo["Valor (R$)"] = round(saldo * valores_hora.get(func_nome, 0), 2)
+                    resumo_data.append(linha_resumo)
 
                 df_resumo = pd.DataFrame(resumo_data)
-                st.dataframe(df_resumo, use_container_width=True, hide_index=True)
+                cfg_resumo = {"Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")} if ver_valores else None
+                st.dataframe(df_resumo, use_container_width=True, hide_index=True, column_config=cfg_resumo)
+                if ver_valores and any(v == 0 for v in valores_hora.values()):
+                    st.caption("ℹ️ Funcionários com salário não informado aparecem com R$ 0,00.")
 
                 # Botão para exportar consolidado
-                dados_excel, nome_excel = ut.exportar_relatorio_consolidado_excel(dict_funcionarios)
+                dados_excel, nome_excel = ut.exportar_relatorio_consolidado_excel(dict_funcionarios, valores_hora)
                 st.download_button(
                     label="📥 Baixar Relatório Consolidado (Excel)",
                     data=dados_excel,
@@ -498,14 +510,32 @@ elif menu == "Relatórios e Exportação":
                 df_extrato_display = df_extrato.copy()
                 df_extrato_display['Saldo Acumulado'] = df_extrato_display['Movimentacao'].cumsum()
 
+                # Valor em R$ (apenas administradores)
+                vh_rel = None
+                if st.session_state["eh_admin"]:
+                    linha_rel = funcionarios_df.loc[funcionarios_df['id'] == id_func_rel].iloc[0]
+                    vh_rel = rg.valor_hora(linha_rel['salario'], linha_rel['carga_horaria'], linha_rel['divisor_horas'])
+                    if vh_rel > 0:
+                        df_extrato_display['Valor (R$)'] = (df_extrato_display['Movimentacao'] * vh_rel).round(2)
+                    else:
+                        vh_rel = None
+                        st.warning("⚠️ Salário não informado para este funcionário. Cadastre em Configurações > Funcionários para ver o valor em R$.")
+
                 # Métrica do saldo
                 saldo_atual = db.obter_saldo_atual(id_func_rel)
                 cor_saldo = "off" if saldo_atual >= 0 else "inverse"
-                st.metric(
-                    label="💰 Saldo Atual",
-                    value=f"{saldo_atual:.2f} h",
-                    delta_color=cor_saldo
-                )
+                if vh_rel:
+                    col_m1, col_m2 = st.columns(2)
+                    col_m1.metric(label="💰 Saldo Atual", value=f"{saldo_atual:.2f} h", delta_color=cor_saldo)
+                    valor_saldo = f"R$ {saldo_atual * vh_rel:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    col_m2.metric(label="💵 Valor do Saldo Atual", value=valor_saldo,
+                                  help=f"Saldo × valor da hora (R$ {vh_rel:,.2f})")
+                else:
+                    st.metric(
+                        label="💰 Saldo Atual",
+                        value=f"{saldo_atual:.2f} h",
+                        delta_color=cor_saldo
+                    )
 
                 st.dataframe(
                     df_extrato_display,
@@ -513,7 +543,8 @@ elif menu == "Relatórios e Exportação":
                     hide_index=True,
                     column_config={
                         "Movimentacao": st.column_config.NumberColumn(format="%.2f h"),
-                        "Saldo Acumulado": st.column_config.NumberColumn(format="%.2f h")
+                        "Saldo Acumulado": st.column_config.NumberColumn(format="%.2f h"),
+                        "Valor (R$)": st.column_config.NumberColumn(format="R$ %.2f")
                     }
                 )
 
@@ -525,7 +556,8 @@ elif menu == "Relatórios e Exportação":
                         df_extrato,
                         func_relatorio,
                         data_inicio_str,
-                        data_fim_str
+                        data_fim_str,
+                        vh_rel
                     )
                     st.download_button(
                         label="📥 Baixar como Excel",
@@ -537,7 +569,10 @@ elif menu == "Relatórios e Exportação":
                     )
 
                 with col_exp2:
-                    csv = df_extrato.to_csv(index=False).encode('utf-8')
+                    df_csv = df_extrato.copy()
+                    if vh_rel:
+                        df_csv['Valor (R$)'] = (df_csv['Movimentacao'] * vh_rel).round(2)
+                    csv = df_csv.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Baixar como CSV",
                         data=csv,
@@ -614,11 +649,13 @@ elif menu == "Configurações":
 
         novo_func = st.text_input("Nome do Funcionário", key="input_novo_func", placeholder="Ex: João Silva")
 
-        nova_carga = st.number_input("Carga horária diária (horas)", min_value=1.0, max_value=12.0, value=8.0, step=0.5, key="input_nova_carga")
+        col_nc1, col_nc2 = st.columns(2)
+        nova_carga = col_nc1.number_input("Carga horária diária (horas)", min_value=1.0, max_value=12.0, value=8.0, step=0.5, key="input_nova_carga")
+        novo_salario = col_nc2.number_input("Salário mensal (R$)", min_value=0.0, value=0.0, step=100.0, format="%.2f", key="input_novo_salario")
 
         if st.button("✔️ Adicionar Funcionário", type="primary", use_container_width=True):
             if novo_func.strip():
-                if db.adicionar_funcionario(novo_func, nova_carga):
+                if db.adicionar_funcionario(novo_func, nova_carga, novo_salario):
                     st.success(f"✅ '{novo_func}' adicionado com sucesso!")
                     st.rerun()
                 else:
@@ -642,20 +679,38 @@ elif menu == "Configurações":
                     st.info("Selecione um funcionário e confirme a exclusão.")
 
             st.divider()
-            st.subheader("⏱️ Alterar Carga Horária")
-            st.caption("Ao salvar, os saldos de todos os registros já lançados desse funcionário são recalculados.")
-            c1, c2 = st.columns(2)
-            f_sel = c1.selectbox("Funcionário", funcionarios_df['nome'].tolist(), key="carga_func_sel")
-            atual = float(funcionarios_df.loc[funcionarios_df['nome'] == f_sel, 'carga_horaria'].values[0])
-            nova = c2.number_input("Nova carga diária (horas)", min_value=1.0, max_value=12.0, value=atual, step=0.5, key=f"carga_nova_{f_sel}")
-            if st.button("💾 Salvar Carga Horária e Recalcular", type="primary", use_container_width=True):
-                id_f = int(funcionarios_df.loc[funcionarios_df['nome'] == f_sel, 'id'].values[0])
-                ok, qtd = db.atualizar_carga_horaria(id_f, nova)
-                if ok:
-                    st.success(f"✅ Carga de {f_sel}: {nova:g}h/dia. {qtd} registro(s) recalculado(s).")
+            st.subheader("⏱️ Carga Horária e Salário")
+            st.caption("Ao salvar uma nova carga horária, os saldos de todos os registros já lançados desse funcionário são recalculados.")
+            f_sel = st.selectbox("Funcionário", funcionarios_df['nome'].tolist(), key="carga_func_sel")
+            linha_f = funcionarios_df.loc[funcionarios_df['nome'] == f_sel].iloc[0]
+            atual = float(linha_f['carga_horaria'])
+            sal_atual = float(linha_f['salario'] or 0)
+            div_atual = linha_f['divisor_horas']
+            div_atual = 0.0 if div_atual is None or pd.isna(div_atual) else float(div_atual)
+            c1, c2, c3 = st.columns(3)
+            nova = c1.number_input("Carga diária (horas)", min_value=1.0, max_value=12.0, value=atual, step=0.5, key=f"carga_nova_{f_sel}")
+            novo_sal = c2.number_input("Salário mensal (R$)", min_value=0.0, value=sal_atual, step=100.0, format="%.2f", key=f"sal_novo_{f_sel}")
+            novo_div = c3.number_input(
+                "Divisor mensal (0 = automático)", min_value=0.0, max_value=300.0, value=div_atual, step=1.0,
+                help="Horas do mês usadas para achar o valor da hora (salário ÷ divisor). Automático: 220 para 8h/dia e 180 para 6h/dia.",
+                key=f"div_novo_{f_sel}")
+            vh_prev = rg.valor_hora(novo_sal, nova, novo_div)
+            div_usado = novo_div if novo_div > 0 else rg.divisor_padrao(nova)
+            st.info(f"💵 Valor da hora: **R$ {vh_prev:,.2f}** (salário ÷ {div_usado:g} h)".replace(",", "X").replace(".", ",").replace("X", "."))
+            if st.button("💾 Salvar Carga Horária e Salário", type="primary", use_container_width=True):
+                id_f = int(linha_f['id'])
+                ok_s = db.atualizar_salario(id_f, novo_sal, novo_div)
+                ok_c, qtd = (True, 0)
+                if abs(nova - atual) > 1e-9:
+                    ok_c, qtd = db.atualizar_carga_horaria(id_f, nova)
+                if ok_s and ok_c:
+                    msg = f"✅ {f_sel}: {nova:g}h/dia."
+                    if qtd:
+                        msg += f" {qtd} registro(s) recalculado(s)."
+                    st.success(msg)
                     st.rerun()
                 else:
-                    st.error("❌ Erro ao atualizar a carga horária.")
+                    st.error("❌ Erro ao atualizar os dados do funcionário.")
         else:
             st.info("ℹ️ Nenhum funcionário cadastrado.")
 
@@ -765,6 +820,7 @@ elif menu == "Configurações":
         - **Sábado:** 1.7x (meta: 0h)
         - **Domingo/Feriado:** 2x (meta: 0h)
         - **Almoço:** Desconto automático de 1h se intervalo > 6h
+        - **Valor em R$ (somente admin):** saldo em horas × valor da hora, onde valor da hora = salário ÷ divisor mensal (220 para 8h/dia, 180 para 6h/dia, ajustável por funcionário)
 
         #### 💡 Dicas:
         - Guarde as senhas dos usuários em local seguro

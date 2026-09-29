@@ -220,7 +220,9 @@ def inicializar_banco():
         CREATE TABLE IF NOT EXISTS funcionarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT UNIQUE NOT NULL,
-            carga_horaria REAL NOT NULL DEFAULT 8.0
+            carga_horaria REAL NOT NULL DEFAULT 8.0,
+            salario REAL NOT NULL DEFAULT 0,
+            divisor_horas REAL
         )
     """)
 
@@ -268,10 +270,10 @@ def inicializar_banco():
         c.execute("ALTER TABLE usuarios ADD COLUMN id_funcionario INTEGER REFERENCES funcionarios(id)")
 
     # Migração: carga horária diária por funcionário (padrão 8h para os existentes).
-    c.execute("PRAGMA table_info(funcionarios)")
-    colunas_func = [col[1] for col in c.fetchall()]
-    if 'carga_horaria' not in colunas_func:
-        c.execute("ALTER TABLE funcionarios ADD COLUMN carga_horaria REAL NOT NULL DEFAULT 8.0")
+    conn.close()
+    _garantir_colunas_funcionarios()
+    conn = conectar()
+    c = conn.cursor()
 
     # Verificar se há usuário admin, se não houver criar um padrão de emergência
     # (isso só deve acontecer se todos os administradores forem removidos)
@@ -415,11 +417,12 @@ def redefinir_senha_admin(username_alvo, nova_senha):
 
 # ============= FUNÇÕES DE FUNCIONÁRIOS =============
 
-def adicionar_funcionario(nome, carga_horaria=8.0):
-    """Adiciona um novo funcionário com sua carga horária diária (em horas)."""
+def adicionar_funcionario(nome, carga_horaria=8.0, salario=0.0):
+    """Adiciona um novo funcionário com carga horária diária (h) e salário mensal (R$)."""
     conn = conectar()
     try:
-        conn.execute("INSERT INTO funcionarios (nome, carga_horaria) VALUES (?, ?)", (nome, float(carga_horaria)))
+        conn.execute("INSERT INTO funcionarios (nome, carga_horaria, salario) VALUES (?, ?, ?)",
+                     (nome, float(carga_horaria), float(salario)))
         conn.commit()
         _limpar_cache(listar_funcionarios)
         return True
@@ -428,13 +431,21 @@ def adicionar_funcionario(nome, carga_horaria=8.0):
     finally:
         conn.close()
 
-def _garantir_coluna_carga_horaria():
-    """Cria a coluna carga_horaria (padrão 8h) se ainda não existir. Idempotente."""
+COLUNAS_FUNCIONARIOS = {
+    "carga_horaria": "REAL NOT NULL DEFAULT 8.0",
+    "salario": "REAL NOT NULL DEFAULT 0",
+    "divisor_horas": "REAL",
+}
+
+def _garantir_colunas_funcionarios():
+    """Cria as colunas novas de funcionarios (carga horária, salário, divisor)
+    se ainda não existirem. Idempotente."""
     conn = conectar()
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(funcionarios)").fetchall()]
-        if 'carga_horaria' not in cols:
-            conn.execute("ALTER TABLE funcionarios ADD COLUMN carga_horaria REAL NOT NULL DEFAULT 8.0")
+        for nome, tipo in COLUNAS_FUNCIONARIOS.items():
+            if nome not in cols:
+                conn.execute(f"ALTER TABLE funcionarios ADD COLUMN {nome} {tipo}")
     finally:
         conn.close()
 
@@ -444,11 +455,26 @@ def listar_funcionarios():
     ao adicionar/remover funcionário) — é a consulta mais repetida do app,
     chamada em praticamente toda tela."""
     df = _query_df("SELECT * FROM funcionarios ORDER BY nome")
-    if 'carga_horaria' not in df.columns:
-        # Banco criado antes da carga horária por funcionário: migra na hora.
-        _garantir_coluna_carga_horaria()
+    if any(c not in df.columns for c in COLUNAS_FUNCIONARIOS):
+        # Banco criado antes das colunas novas (carga horária, salário): migra na hora.
+        _garantir_colunas_funcionarios()
         df = _query_df("SELECT * FROM funcionarios ORDER BY nome")
     return df
+
+def atualizar_salario(id_funcionario, salario, divisor_horas=None):
+    """Atualiza salário mensal (R$) e divisor de horas (None/0 = automático pela carga)."""
+    conn = conectar()
+    try:
+        div = float(divisor_horas) if divisor_horas else None
+        conn.execute("UPDATE funcionarios SET salario = ?, divisor_horas = ? WHERE id = ?",
+                     (float(salario), div, id_funcionario))
+        conn.commit()
+        _limpar_cache(listar_funcionarios)
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
 
 def atualizar_carga_horaria(id_funcionario, carga_horaria):
     """
