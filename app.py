@@ -692,7 +692,7 @@ elif menu == "Configurações":
             novo_sal = c2.number_input("Salário mensal (R$)", min_value=0.0, value=sal_atual, step=100.0, format="%.2f", key=f"sal_novo_{f_sel}")
             novo_div = c3.number_input(
                 "Divisor mensal (0 = automático)", min_value=0.0, max_value=300.0, value=div_atual, step=1.0,
-                help="Horas do mês usadas para achar o valor da hora (salário ÷ divisor). Automático: 220 para 8h/dia e 180 para 6h/dia.",
+                help="Horas do mês usadas para achar o valor da hora (salário ÷ divisor). Automático: carga diária × 25 (200 para 8h/dia = 40h/sem; 150 para 6h/dia = 30h/sem).",
                 key=f"div_novo_{f_sel}")
             vh_prev = rg.valor_hora(novo_sal, nova, novo_div)
             div_usado = novo_div if novo_div > 0 else rg.divisor_padrao(nova)
@@ -820,7 +820,7 @@ elif menu == "Configurações":
         - **Sábado:** 1.7x (meta: 0h)
         - **Domingo/Feriado:** 2x (meta: 0h)
         - **Almoço:** Desconto automático de 1h se intervalo > 6h
-        - **Valor em R$ (somente admin):** saldo em horas × valor da hora, onde valor da hora = salário ÷ divisor mensal (220 para 8h/dia, 180 para 6h/dia, ajustável por funcionário)
+        - **Valor em R$ (somente admin):** saldo em horas × valor da hora, onde valor da hora = salário ÷ divisor mensal (200 para 8h/dia = 40h/sem, 150 para 6h/dia = 30h/sem; ajustável por funcionário)
 
         #### 💡 Dicas:
         - Guarde as senhas dos usuários em local seguro

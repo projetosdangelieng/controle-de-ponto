@@ -148,11 +148,11 @@ def calcular_saldo(entrada_str, saida_str, data_str, is_feriado=False, ignorar_a
 def divisor_padrao(carga_horaria):
     """
     Divisor mensal de horas usado para achar o valor da hora a partir do salário.
-    CLT: jornada de 8h/dia (44h/semana) = 220; 6h/dia (36h/semana) = 180.
-    Outras cargas: carga x 30.
+    Regra CLT: horas semanais x 5 (semana de 5 dias úteis + DSR).
+    Com jornada de segunda a sexta, horas semanais = carga diária x 5, então
+    divisor = carga diária x 25:  8h/dia (40h/sem) = 200;  6h/dia (30h/sem) = 150.
     """
-    carga = float(carga_horaria)
-    return 220.0 if carga >= 8 else round(carga * 30.0, 2)
+    return round(float(carga_horaria) * 25.0, 2)
 
 
 def valor_hora(salario, carga_horaria, divisor=None):
