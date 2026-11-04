@@ -262,6 +262,21 @@ def inicializar_banco():
         )
     """)
 
+    # Tabela de Fechamentos Mensais (transferência ao banco de horas ou
+    # pagamento de horas extras). Um fechamento por funcionário e mês.
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS fechamentos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_funcionario INTEGER NOT NULL,
+            ano_mes TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            horas REAL NOT NULL,
+            data_pagamento DATE,
+            UNIQUE(id_funcionario, ano_mes),
+            FOREIGN KEY(id_funcionario) REFERENCES funcionarios(id)
+        )
+    """)
+
     # Migração: garantir que bancos antigos (criados antes desta versão) ganhem
     # a coluna id_funcionario na tabela usuarios, sem perder dados existentes.
     c.execute("PRAGMA table_info(usuarios)")
@@ -630,6 +645,118 @@ def registrar_ajuste(data, id_funcionario, valor_decimal, motivo):
     finally:
         conn.close()
 
+def listar_ajustes_funcionario(id_funcionario):
+    """Lista os ajustes de um funcionário, com o id, para correção/exclusão (admin)."""
+    return _query_df("SELECT id, data, valor_decimal, motivo FROM ajustes WHERE id_funcionario = ? ORDER BY data, id",
+                     (id_funcionario,))
+
+def atualizar_ajuste(id_ajuste, data, valor_decimal, motivo):
+    """Corrige data, valor e motivo de um ajuste existente (admin)."""
+    conn = conectar()
+    try:
+        conn.execute("UPDATE ajustes SET data = ?, valor_decimal = ?, motivo = ? WHERE id = ?",
+                    (data, valor_decimal, motivo, id_ajuste))
+        conn.commit()
+        return True
+    except Exception as e:
+        return False
+    finally:
+        conn.close()
+
+def excluir_ajuste(id_ajuste):
+    """Exclui um ajuste pelo id (admin)."""
+    conn = conectar()
+    try:
+        conn.execute("DELETE FROM ajustes WHERE id = ?", (id_ajuste,))
+        conn.commit()
+        return True
+    except Exception as e:
+        return False
+    finally:
+        conn.close()
+
+# ============= FECHAMENTO MENSAL (BANCO DE HORAS / PAGAMENTO) =============
+
+def obter_saldo_mes(id_funcionario, ano_mes):
+    """Soma dos saldos dos registros diários do funcionário no mês ('AAAA-MM')."""
+    df = _query_df(
+        "SELECT COALESCE(SUM(saldo_decimal), 0.0) AS saldo FROM registros "
+        "WHERE id_funcionario = ? AND strftime('%Y-%m', data) = ?",
+        (id_funcionario, ano_mes))
+    return round(float(df['saldo'].iloc[0]), 2)
+
+def obter_fechamento(id_funcionario, ano_mes):
+    """Retorna o fechamento do mês como dict, ou None se o mês está em aberto."""
+    df = _query_df(
+        "SELECT id, tipo, horas, data_pagamento FROM fechamentos "
+        "WHERE id_funcionario = ? AND ano_mes = ?", (id_funcionario, ano_mes))
+    if df.empty:
+        return None
+    return df.iloc[0].to_dict()
+
+def listar_fechamentos_funcionario(id_funcionario):
+    """Histórico de fechamentos do funcionário (mais recente primeiro)."""
+    return _query_df(
+        "SELECT ano_mes, tipo, horas, data_pagamento FROM fechamentos "
+        "WHERE id_funcionario = ? ORDER BY ano_mes DESC", (id_funcionario,))
+
+def transferir_mes_para_banco(id_funcionario, ano_mes):
+    """Marca o mês como transferido ao banco de horas (não altera valores).
+    Retorna (sucesso, mensagem)."""
+    saldo = obter_saldo_mes(id_funcionario, ano_mes)
+    conn = conectar()
+    try:
+        conn.execute(
+            "INSERT INTO fechamentos (id_funcionario, ano_mes, tipo, horas) VALUES (?, ?, 'BANCO', ?)",
+            (id_funcionario, ano_mes, saldo))
+        conn.commit()
+        return True, f"Saldo de {saldo:+.2f} h transferido ao banco de horas."
+    except sqlite3.IntegrityError:
+        return False, "Este mês já está fechado para o funcionário."
+    except Exception as e:
+        return False, "Erro ao transferir o mês para o banco de horas."
+    finally:
+        conn.close()
+
+def pagar_horas_extras_mes(id_funcionario, ano_mes, data_pagamento):
+    """Baixa todo o saldo positivo do mês: registra o fechamento (com a data de
+    pagamento) e um ajuste negativo na data do pagamento, para essas horas
+    deixarem de compor o banco de horas. Retorna (sucesso, mensagem)."""
+    horas = obter_saldo_mes(id_funcionario, ano_mes)
+    if horas <= 0:
+        return False, "O mês não tem saldo positivo de horas extras para pagar."
+    ano, mes = ano_mes.split('-')
+    motivo = f"Pagamento de horas extras - competência {mes}/{ano}"
+    conn = conectar()
+    try:
+        # Fechamento primeiro: a restrição UNIQUE impede pagar o mês duas vezes.
+        conn.execute(
+            "INSERT INTO fechamentos (id_funcionario, ano_mes, tipo, horas, data_pagamento) "
+            "VALUES (?, ?, 'PAGAMENTO', ?, ?)",
+            (id_funcionario, ano_mes, horas, data_pagamento))
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False, "Este mês já está fechado para o funcionário."
+    except Exception as e:
+        conn.close()
+        return False, "Erro ao registrar o pagamento."
+    try:
+        conn.execute(
+            "INSERT INTO ajustes (data, id_funcionario, valor_decimal, motivo) VALUES (?, ?, ?, ?)",
+            (data_pagamento, id_funcionario, -horas, motivo))
+        conn.commit()
+        return True, f"{horas:.2f} h pagas em {data_pagamento} e baixadas do banco de horas."
+    except Exception as e:
+        # Desfaz o fechamento para não deixar o mês marcado sem a baixa.
+        try:
+            conn.execute("DELETE FROM fechamentos WHERE id_funcionario = ? AND ano_mes = ?",
+                        (id_funcionario, ano_mes))
+        except Exception:
+            pass
+        return False, "Erro ao registrar a baixa das horas."
+    finally:
+        conn.close()
+
 # ============= FUNÇÕES DE EXTRATO =============
 
 def obter_extrato_funcionario(id_funcionario, data_inicio=None, data_fim=None):
@@ -752,6 +879,7 @@ def obter_backup_completo():
         "funcionarios": _query_df("SELECT * FROM funcionarios ORDER BY id"),
         "registros": _query_df("SELECT * FROM registros ORDER BY data, id_funcionario"),
         "ajustes": _query_df("SELECT * FROM ajustes ORDER BY data, id_funcionario"),
+        "fechamentos": _query_df("SELECT * FROM fechamentos ORDER BY ano_mes, id_funcionario"),
         "feriados": _query_df("SELECT * FROM feriados ORDER BY data"),
     }
 
