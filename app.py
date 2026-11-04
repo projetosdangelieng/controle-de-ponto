@@ -483,65 +483,88 @@ elif menu == "Ajustes e Saques":
                     else:
                         st.error("❌ Erro ao excluir ajuste.")
 
-        # === FECHAMENTO DO MÊS (somente administrador) ===
+        # === FECHAMENTO DO MÊS EM LOTE (somente administrador) ===
         if st.session_state["eh_admin"]:
             st.divider()
             st.subheader("🗓️ Fechamento do Mês (Administrador)")
-            id_func_fech = int(funcionarios_df.loc[funcionarios_df['nome'] == func_ajuste, 'id'].values[0])
+
+            # Resultado da última operação (mostrado após o rerun)
+            for ok_m, txt_m in st.session_state.pop("fech_msgs", []):
+                (st.success if ok_m else st.error)(txt_m)
+
             meses_fech = db.listar_meses_disponiveis()
             opcoes_fech = [f"{NOMES_MESES[m]}/{y}" for (y, m) in meses_fech]
             mes_fech = st.selectbox("🗓️ Mês de análise", opcoes_fech, key="fech_mes")
             ano_f, mes_f = meses_fech[opcoes_fech.index(mes_fech)]
             ano_mes_f = f"{ano_f:04d}-{mes_f:02d}"
 
-            saldo_mes_f = db.obter_saldo_mes(id_func_fech, ano_mes_f)
-            fech = db.obter_fechamento(id_func_fech, ano_mes_f)
-            st.metric("Saldo do mês (registros diários)", f"{saldo_mes_f:+.2f} h")
+            saldos_mes = db.obter_saldos_mes(ano_mes_f)
+            fechs_mes = db.listar_fechamentos_mes(ano_mes_f)
 
-            if fech is not None:
-                if fech['tipo'] == 'BANCO':
-                    st.info(f"🏦 Mês já transferido ao banco de horas ({float(fech['horas']):+.2f} h).")
+            linhas_fech = []
+            abertos = []
+            ids_por_nome = {}
+            for _, fr in funcionarios_df.iterrows():
+                fid = int(fr['id'])
+                ids_por_nome[fr['nome']] = fid
+                fch = fechs_mes.get(fid)
+                if fch is None:
+                    situacao = "Em aberto"
+                    abertos.append(fr['nome'])
+                elif fch['tipo'] == 'BANCO':
+                    situacao = "🏦 No banco de horas"
                 else:
-                    st.info(f"💵 Horas extras já pagas: {float(fech['horas']):.2f} h, "
-                            f"data de pagamento {fech['data_pagamento']}.")
+                    situacao = f"💵 Pago em {fch['data_pagamento']}"
+                linhas_fech.append({
+                    "Funcionário": fr['nome'],
+                    "Saldo do mês (h)": round(float(saldos_mes.get(fid, 0.0)), 2),
+                    "Situação": situacao,
+                })
+            st.dataframe(linhas_fech, use_container_width=True, hide_index=True)
+
+            if not abertos:
+                st.info("Todos os funcionários já estão fechados neste mês.")
             else:
+                sel_todos = st.checkbox("Selecionar todos os funcionários em aberto",
+                                        key=f"fech_todos_{ano_mes_f}")
+                if sel_todos:
+                    selecionados = list(abertos)
+                    st.caption(f"{len(selecionados)} funcionário(s) selecionado(s).")
+                else:
+                    selecionados = st.multiselect("Funcionários", abertos, key=f"fech_sel_{ano_mes_f}")
+
                 confirma_fech = st.checkbox(
-                    "Confirmo o fechamento deste mês (não há estorno automático)", key="conf_fech")
+                    "Confirmo o fechamento deste mês para os selecionados (não há estorno automático)",
+                    key=f"conf_fech_{ano_mes_f}")
+                pode_fechar = confirma_fech and len(selecionados) > 0
                 col_banco, col_pag = st.columns(2)
 
                 with col_banco:
                     st.markdown("**🏦 Banco de Horas**")
-                    st.caption("Transfere o saldo do mês para o banco de horas total.")
+                    st.caption("Transfere o saldo do mês dos selecionados para o banco de horas total.")
                     if st.button("Transferir para o Banco", key="btn_fech_banco",
-                                 disabled=not confirma_fech, use_container_width=True):
-                        ok_f, msg_f = db.transferir_mes_para_banco(id_func_fech, ano_mes_f)
-                        if ok_f:
-                            st.success(f"✅ {msg_f}")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {msg_f}")
+                                 disabled=not pode_fechar, use_container_width=True):
+                        msgs = []
+                        for nome_f in selecionados:
+                            ok_f, msg_f = db.transferir_mes_para_banco(ids_por_nome[nome_f], ano_mes_f)
+                            msgs.append((ok_f, f"{nome_f}: {msg_f}"))
+                        st.session_state["fech_msgs"] = msgs
+                        st.rerun()
 
                 with col_pag:
                     st.markdown("**💵 Pagamento de Horas Extras**")
-                    st.caption("Baixa as horas extras positivas do mês; elas deixam de contar no banco.")
+                    st.caption("Baixa as horas extras positivas do mês dos selecionados; "
+                               "quem não tem saldo positivo é ignorado.")
                     data_pag = st.date_input("📅 Data do pagamento", rg.hoje_brasilia(), key="fech_data_pag")
                     if st.button("Pagar Horas Extras", key="btn_fech_pag", type="primary",
-                                 disabled=(not confirma_fech) or saldo_mes_f <= 0,
-                                 use_container_width=True):
-                        ok_f, msg_f = db.pagar_horas_extras_mes(
-                            id_func_fech, ano_mes_f, data_pag.strftime('%Y-%m-%d'))
-                        if ok_f:
-                            st.success(f"✅ {msg_f}")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {msg_f}")
-
-            hist_fech = db.listar_fechamentos_funcionario(id_func_fech)
-            if not hist_fech.empty:
-                with st.expander("📜 Histórico de fechamentos do funcionário"):
-                    st.dataframe(hist_fech.rename(columns={
-                        "ano_mes": "Competência", "tipo": "Tipo", "horas": "Horas",
-                        "data_pagamento": "Data de pagamento"}), use_container_width=True, hide_index=True)
+                                 disabled=not pode_fechar, use_container_width=True):
+                        msgs = []
+                        for nome_f in selecionados:
+                            ok_f, msg_f = db.pagar_horas_extras_mes(
+                                ids_por_nome[nome_f], ano_mes_f, data_pag.strftime('%Y-%m-%d'))
+                            msgs.append((ok_f, f"{nome_f}: {msg_f}"))
+                        st.session_state["fech_msgs"] = msgs
+                        st.rerun()
 
 # === MENU: RELATÓRIOS E EXPORTAÇÃO ===
 elif menu == "Relatórios e Exportação":
