@@ -503,6 +503,7 @@ elif menu == "Ajustes e Saques":
 
             linhas_fech = []
             abertos = []
+            no_banco = []
             ids_por_nome = {}
             for _, fr in funcionarios_df.iterrows():
                 fid = int(fr['id'])
@@ -513,6 +514,7 @@ elif menu == "Ajustes e Saques":
                     abertos.append(fr['nome'])
                 elif fch['tipo'] == 'BANCO':
                     situacao = "🏦 No banco de horas"
+                    no_banco.append(fr['nome'])
                 else:
                     situacao = f"💵 Pago em {fch['data_pagamento']}"
                 linhas_fech.append({
@@ -562,6 +564,22 @@ elif menu == "Ajustes e Saques":
                         for nome_f in selecionados:
                             ok_f, msg_f = db.pagar_horas_extras_mes(
                                 ids_por_nome[nome_f], ano_mes_f, data_pag.strftime('%Y-%m-%d'))
+                            msgs.append((ok_f, f"{nome_f}: {msg_f}"))
+                        st.session_state["fech_msgs"] = msgs
+                        st.rerun()
+
+            if no_banco:
+                with st.expander("↩️ Desfazer transferência ao banco de horas"):
+                    st.caption("Remove só a marcação de transferido ao banco; nenhum valor de horas é alterado. "
+                               "Pagamentos de horas extras não são desfeitos aqui.")
+                    sel_desfazer = st.multiselect("Funcionários", no_banco, key=f"desf_sel_{ano_mes_f}")
+                    conf_desf = st.checkbox("Confirmo desfazer a transferência ao banco dos selecionados",
+                                            key=f"desf_conf_{ano_mes_f}")
+                    if st.button("↩️ Desfazer transferência", key="btn_desf_banco",
+                                 disabled=not (conf_desf and len(sel_desfazer) > 0)):
+                        msgs = []
+                        for nome_f in sel_desfazer:
+                            ok_f, msg_f = db.desfazer_transferencia_banco(ids_por_nome[nome_f], ano_mes_f)
                             msgs.append((ok_f, f"{nome_f}: {msg_f}"))
                         st.session_state["fech_msgs"] = msgs
                         st.rerun()
