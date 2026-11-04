@@ -277,6 +277,18 @@ def inicializar_banco():
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vigencias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_funcionario INTEGER NOT NULL,
+            inicio DATE NOT NULL,
+            carga_horaria REAL NOT NULL,
+            salario REAL NOT NULL,
+            divisor_horas REAL,
+            UNIQUE(id_funcionario, inicio),
+            FOREIGN KEY(id_funcionario) REFERENCES funcionarios(id)
+        )
+    """)
     # Migração: garantir que bancos antigos (criados antes desta versão) ganhem
     # a coluna id_funcionario na tabela usuarios, sem perder dados existentes.
     c.execute("PRAGMA table_info(usuarios)")
@@ -491,38 +503,137 @@ def atualizar_salario(id_funcionario, salario, divisor_horas=None):
     finally:
         conn.close()
 
+def _parametros_base(conn, id_funcionario):
+    cur = conn.execute("SELECT carga_horaria, salario, divisor_horas FROM funcionarios WHERE id = ?", (id_funcionario,))
+    r = cur.fetchone()
+    return (float(r[0]), float(r[1] or 0), r[2]) if r else (8.0, 0.0, None)
+
+
+def _listar_vigencias_conn(conn, id_funcionario):
+    cur = conn.execute(
+        "SELECT inicio, carga_horaria, salario, divisor_horas FROM vigencias WHERE id_funcionario = ? ORDER BY inicio",
+        (id_funcionario,))
+    return [(str(i)[:10], float(c), float(s or 0), d) for i, c, s, d in cur.fetchall()]
+
+
+def _recalcular_registros(conn, id_funcionario, desde=None):
+    """Recalcula o saldo dos registros (a partir de 'desde', se informado) usando a carga vigente em cada data."""
+    import regras as rg
+    base = _parametros_base(conn, id_funcionario)
+    vig = _listar_vigencias_conn(conn, id_funcionario)
+    fer_df = listar_feriados()
+    feriados = set(fer_df['data'].astype(str).tolist()) if not fer_df.empty else set()
+    sql = "SELECT id, data, entrada, saida, descontou_almoco, falta_injustificada FROM registros WHERE id_funcionario = ?"
+    params = [id_funcionario]
+    if desde:
+        sql += " AND data >= ?"
+        params.append(str(desde)[:10])
+    qtd = 0
+    for reg_id, data, ent, sai, desc_alm, falta in conn.execute(sql, tuple(params)).fetchall():
+        carga = float(rg.parametros_na_data(str(data), base, vig)[0])
+        if falta:
+            novo, novo_desc = -carga, False
+        elif ent and sai:
+            # Se o almoço não foi descontado num turno longo, foi ignorado de propósito: preserva isso.
+            h1, m1 = map(int, ent.split(':')); h2, m2 = map(int, sai.split(':'))
+            span = (h2 * 60 + m2) - (h1 * 60 + m1)
+            ignorar = (not desc_alm) and span > 360
+            novo, novo_desc = rg.calcular_saldo(ent, sai, str(data), str(data) in feriados, ignorar, carga)
+        else:
+            continue
+        conn.execute("UPDATE registros SET saldo_decimal = ?, descontou_almoco = ? WHERE id = ?",
+                     (novo, 1 if novo_desc else 0, reg_id))
+        qtd += 1
+    return qtd
+
+
 def atualizar_carga_horaria(id_funcionario, carga_horaria):
     """
-    Altera a carga horária diária do funcionário e RECALCULA o saldo de todos
-    os registros dele já lançados (dias completos e faltas injustificadas).
-    Retorna (ok, qtd_registros_recalculados).
+    Altera a carga horária BASE (vale antes da primeira vigência) e RECALCULA o saldo dos
+    registros do funcionário respeitando as vigências. Retorna (ok, qtd_registros_recalculados).
     """
-    import regras as rg
-    carga = float(carga_horaria)
     conn = conectar()
     try:
-        conn.execute("UPDATE funcionarios SET carga_horaria = ? WHERE id = ?", (carga, id_funcionario))
-        feriados = set(listar_feriados()['data'].astype(str).tolist()) if not listar_feriados().empty else set()
-        cur = conn.execute(
-            "SELECT id, data, entrada, saida, descontou_almoco, falta_injustificada FROM registros WHERE id_funcionario = ?",
-            (id_funcionario,))
-        qtd = 0
-        for reg_id, data, ent, sai, desc_alm, falta in cur.fetchall():
-            if falta:
-                novo, novo_desc = -carga, False
-            elif ent and sai:
-                # Se o almoço não foi descontado num turno longo, foi ignorado de propósito: preserva isso.
-                h1, m1 = map(int, ent.split(':')); h2, m2 = map(int, sai.split(':'))
-                span = (h2 * 60 + m2) - (h1 * 60 + m1)
-                ignorar = (not desc_alm) and span > 360
-                novo, novo_desc = rg.calcular_saldo(ent, sai, str(data), str(data) in feriados, ignorar, carga)
-            else:
-                continue
-            conn.execute("UPDATE registros SET saldo_decimal = ?, descontou_almoco = ? WHERE id = ?",
-                         (novo, 1 if novo_desc else 0, reg_id))
-            qtd += 1
+        conn.execute("UPDATE funcionarios SET carga_horaria = ? WHERE id = ?", (float(carga_horaria), id_funcionario))
+        qtd = _recalcular_registros(conn, id_funcionario)
         conn.commit()
         _limpar_cache(listar_funcionarios)
+        return True, qtd
+    except Exception:
+        return False, 0
+    finally:
+        conn.close()
+
+
+def listar_vigencias(id_funcionario):
+    """Vigências do funcionário (lista de dicts, da mais antiga à mais recente)."""
+    conn = conectar()
+    try:
+        return [dict(inicio=i, carga_horaria=c, salario=s, divisor_horas=d)
+                for i, c, s, d in _listar_vigencias_conn(conn, id_funcionario)]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def listar_todas_vigencias():
+    """{id_funcionario: [(inicio, carga, salario, divisor), ...]} para relatórios."""
+    try:
+        df = _query_df("SELECT id_funcionario, inicio, carga_horaria, salario, divisor_horas FROM vigencias ORDER BY inicio")
+    except Exception:
+        return {}
+    out = {}
+    for _, r in df.iterrows():
+        d = r['divisor_horas']
+        d = None if d is None or d != d else float(d)
+        out.setdefault(int(r['id_funcionario']), []).append(
+            (str(r['inicio'])[:10], float(r['carga_horaria']), float(r['salario'] or 0), d))
+    return out
+
+
+def parametros_na_data(id_funcionario, data_str):
+    """(carga_horaria, salario, divisor) vigentes do funcionário na data."""
+    import regras as rg
+    conn = conectar()
+    try:
+        return rg.parametros_na_data(data_str, _parametros_base(conn, id_funcionario),
+                                     _listar_vigencias_conn(conn, id_funcionario))
+    finally:
+        conn.close()
+
+
+def salvar_vigencia(id_funcionario, inicio, carga_horaria, salario, divisor_horas=None):
+    """
+    Cria (ou substitui, se já existir a mesma data) uma vigência e recalcula os registros
+    a partir da data de início. Registros anteriores NÃO são alterados.
+    Retorna (ok, qtd_recalculados).
+    """
+    conn = conectar()
+    try:
+        ini = str(inicio)[:10]
+        div = float(divisor_horas) if divisor_horas else None
+        conn.execute("DELETE FROM vigencias WHERE id_funcionario = ? AND inicio = ?", (id_funcionario, ini))
+        conn.execute(
+            "INSERT INTO vigencias (id_funcionario, inicio, carga_horaria, salario, divisor_horas) VALUES (?, ?, ?, ?, ?)",
+            (id_funcionario, ini, float(carga_horaria), float(salario), div))
+        qtd = _recalcular_registros(conn, id_funcionario, ini)
+        conn.commit()
+        return True, qtd
+    except Exception:
+        return False, 0
+    finally:
+        conn.close()
+
+
+def excluir_vigencia(id_funcionario, inicio):
+    """Remove uma vigência e recalcula os registros a partir dela (voltam aos parâmetros anteriores)."""
+    conn = conectar()
+    try:
+        ini = str(inicio)[:10]
+        conn.execute("DELETE FROM vigencias WHERE id_funcionario = ? AND inicio = ?", (id_funcionario, ini))
+        qtd = _recalcular_registros(conn, id_funcionario, ini)
+        conn.commit()
         return True, qtd
     except Exception:
         return False, 0
@@ -535,6 +646,7 @@ def deletar_funcionario(id_funcionario):
     try:
         conn.execute("DELETE FROM registros WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM ajustes WHERE id_funcionario = ?", (id_funcionario,))
+        conn.execute("DELETE FROM vigencias WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM funcionarios WHERE id = ?", (id_funcionario,))
         conn.commit()
         _limpar_cache(listar_funcionarios)
@@ -919,6 +1031,7 @@ def obter_backup_completo():
         "registros": _query_df("SELECT * FROM registros ORDER BY data, id_funcionario"),
         "ajustes": _query_df("SELECT * FROM ajustes ORDER BY data, id_funcionario"),
         "fechamentos": _query_df("SELECT * FROM fechamentos ORDER BY ano_mes, id_funcionario"),
+        "vigencias": _query_df("SELECT * FROM vigencias ORDER BY id_funcionario, inicio"),
         "feriados": _query_df("SELECT * FROM feriados ORDER BY data"),
     }
 
