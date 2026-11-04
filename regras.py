@@ -181,18 +181,34 @@ def valor_hora(salario, carga_horaria, divisor=None, dias_uteis=None):
     return round(salario / div, 4)
 
 
-def valores_por_movimento(datas, movimentos, salario, carga_horaria, divisor=None, feriados=None):
+def parametros_na_data(data, base, vigencias=None):
+    """
+    Parâmetros (carga_horaria, salario, divisor) vigentes numa data.
+    base: tupla (carga, salario, divisor) cadastrada no funcionário (vale antes da 1ª vigência).
+    vigencias: lista de (inicio 'AAAA-MM-DD', carga, salario, divisor); vale a última com inicio <= data.
+    """
+    d = str(data)[:10]
+    atual = tuple(base)
+    for inicio, carga, salario, divisor in sorted(vigencias or [], key=lambda v: str(v[0])[:10]):
+        if str(inicio)[:10] <= d:
+            atual = (carga, salario, divisor)
+    return atual
+
+
+def valores_por_movimento(datas, movimentos, salario, carga_horaria, divisor=None, feriados=None, vigencias=None):
     """
     Converte cada movimentação (horas) em R$, usando o valor da hora do MÊS
-    da própria data. Retorna lista de floats (mesma ordem de entrada).
+    da própria data (e, se houver vigências, a carga/salário vigentes na data).
+    Retorna lista de floats (mesma ordem de entrada).
     """
     feriados = feriados or set()
     cache = {}
     saida = []
     for data, mov in zip(datas, movimentos):
-        chave = str(data)[:7]
+        carga, sal, div = parametros_na_data(data, (carga_horaria, salario, divisor), vigencias)
+        chave = (str(data)[:7], carga, sal, div)
         if chave not in cache:
-            ano, mes = int(chave[:4]), int(chave[5:7])
-            cache[chave] = valor_hora(salario, carga_horaria, divisor, dias_uteis_mes(ano, mes, feriados))
+            ano, mes = int(chave[0][:4]), int(chave[0][5:7])
+            cache[chave] = valor_hora(sal, carga, div, dias_uteis_mes(ano, mes, feriados))
         saida.append(round(float(mov) * cache[chave], 2))
     return saida
