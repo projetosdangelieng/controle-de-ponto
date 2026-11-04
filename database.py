@@ -700,6 +700,24 @@ def listar_fechamentos_funcionario(id_funcionario):
         "SELECT ano_mes, tipo, horas, data_pagamento FROM fechamentos "
         "WHERE id_funcionario = ? ORDER BY ano_mes DESC", (id_funcionario,))
 
+def obter_saldos_mes(ano_mes):
+    """Saldo (soma dos registros diários) de todos os funcionários no mês
+    ('AAAA-MM'), numa única consulta. Retorna {id_funcionario: saldo}."""
+    df = _query_df(
+        "SELECT id_funcionario, COALESCE(SUM(saldo_decimal), 0.0) AS saldo FROM registros "
+        "WHERE strftime('%Y-%m', data) = ? GROUP BY id_funcionario", (ano_mes,))
+    return {int(r['id_funcionario']): round(float(r['saldo']), 2) for _, r in df.iterrows()}
+
+def listar_fechamentos_mes(ano_mes):
+    """Fechamentos de todos os funcionários no mês, numa única consulta.
+    Retorna {id_funcionario: {'tipo', 'horas', 'data_pagamento'}}."""
+    df = _query_df(
+        "SELECT id_funcionario, tipo, horas, data_pagamento FROM fechamentos "
+        "WHERE ano_mes = ?", (ano_mes,))
+    return {int(r['id_funcionario']): {'tipo': r['tipo'], 'horas': float(r['horas']),
+                                       'data_pagamento': r['data_pagamento']}
+            for _, r in df.iterrows()}
+
 def transferir_mes_para_banco(id_funcionario, ano_mes):
     """Marca o mês como transferido ao banco de horas (não altera valores).
     Retorna (sucesso, mensagem)."""
