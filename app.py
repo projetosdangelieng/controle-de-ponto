@@ -604,12 +604,27 @@ elif menu == "Relatórios e Exportação":
         with col_filt2:
             filtro_tipo = st.radio(
                 "📅 Tipo de Filtro",
-                ["Selecionar Mês", "Range Customizado"],
+                ["Total Geral", "Selecionar Mês", "Range Customizado"],
+                index=1,
                 horizontal=True,
                 key="filtro_tipo"
             )
 
-        if filtro_tipo == "Selecionar Mês":
+        if filtro_tipo == "Total Geral":
+            # Soma de todos os meses: do mês mais antigo com lançamento até o mais recente.
+            meses_total = db.listar_meses_disponiveis()
+            ano_ini, mes_ini = meses_total[-1]
+            ano_fim, mes_fim = meses_total[0]
+            data_inicio = date(ano_ini, mes_ini, 1)
+            if mes_fim == 12:
+                data_fim = date(ano_fim + 1, 1, 1) - timedelta(days=1)
+            else:
+                data_fim = date(ano_fim, mes_fim + 1, 1) - timedelta(days=1)
+
+            with col_filt3:
+                st.caption(f"📆 Todos os meses: {NOMES_MESES[mes_ini]}/{ano_ini} a {NOMES_MESES[mes_fim]}/{ano_fim}")
+
+        elif filtro_tipo == "Selecionar Mês":
             meses_disponiveis = db.listar_meses_disponiveis()
             opcoes_mes = [f"{NOMES_MESES[m]}/{y}" for (y, m) in meses_disponiveis]
 
