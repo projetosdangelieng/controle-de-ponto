@@ -584,6 +584,23 @@ elif menu == "Ajustes e Saques":
                         st.session_state["fech_msgs"] = msgs
                         st.rerun()
 
+            pend_pag = db.listar_pagamentos_a_corrigir()
+            if pend_pag:
+                with st.expander(f"🛠️ Corrigir data de pagamentos já feitos ({len(pend_pag)})"):
+                    st.caption("Estes pagamentos foram datados no dia do pagamento, o que faz o mês seguinte aparecer negativo. "
+                               "A correção move o ajuste para o último dia do mês das horas (o mês fecha em 0,00). "
+                               "Os valores de horas não mudam; a data real do pagamento fica no motivo.")
+                    st.dataframe([{"Funcionário": p["nome"], "Competência": p["ano_mes"][5:7] + "/" + p["ano_mes"][:4],
+                                   "Horas": p["horas"],
+                                   "Data atual do ajuste": p["data_atual"][8:10] + "/" + p["data_atual"][5:7] + "/" + p["data_atual"][:4],
+                                   "Nova data": p["data_nova"][8:10] + "/" + p["data_nova"][5:7] + "/" + p["data_nova"][:4]}
+                                  for p in pend_pag], use_container_width=True, hide_index=True)
+                    conf_corr = st.checkbox("Confirmo corrigir a data destes pagamentos", key="conf_corr_pag")
+                    if st.button("🛠️ Corrigir datas", key="btn_corr_pag", disabled=not conf_corr):
+                        ok_c, qtd_c = db.corrigir_datas_pagamentos()
+                        st.session_state["fech_msgs"] = [(ok_c, f"{qtd_c} pagamento(s) com a data corrigida." if ok_c else "Erro ao corrigir as datas.")]
+                        st.rerun()
+
 # === MENU: RELATÓRIOS E EXPORTAÇÃO ===
 elif menu == "Relatórios e Exportação":
     st.header("📊 Relatórios e Exportação")
