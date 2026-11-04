@@ -736,6 +736,27 @@ def transferir_mes_para_banco(id_funcionario, ano_mes):
     finally:
         conn.close()
 
+def desfazer_transferencia_banco(id_funcionario, ano_mes):
+    """Desfaz a marcação de transferência ao banco de horas do mês (não altera
+    nenhum valor de horas; o mês volta a ficar em aberto). Só vale para
+    fechamento do tipo BANCO: pagamentos de horas extras não são desfeitos aqui.
+    Retorna (sucesso, mensagem)."""
+    fech = obter_fechamento(id_funcionario, ano_mes)
+    if fech is None:
+        return False, "Este mês não está fechado para o funcionário."
+    if fech['tipo'] != 'BANCO':
+        return False, "Só é possível desfazer transferências ao banco de horas; pagamentos se corrigem por ajuste."
+    conn = conectar()
+    try:
+        conn.execute("DELETE FROM fechamentos WHERE id_funcionario = ? AND ano_mes = ? AND tipo = 'BANCO'",
+                    (id_funcionario, ano_mes))
+        conn.commit()
+        return True, "Transferência ao banco de horas desfeita; o mês voltou a ficar em aberto."
+    except Exception as e:
+        return False, "Erro ao desfazer a transferência."
+    finally:
+        conn.close()
+
 def pagar_horas_extras_mes(id_funcionario, ano_mes, data_pagamento):
     """Baixa todo o saldo positivo do mês: registra o fechamento (com a data de
     pagamento) e um ajuste negativo na data do pagamento, para essas horas
