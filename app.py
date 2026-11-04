@@ -48,7 +48,7 @@ def _migrar_colunas_funcionarios():
 
 
 @st.cache_resource
-def _inicializar_banco_uma_vez(versao_schema=3):
+def _inicializar_banco_uma_vez(versao_schema=4):
     # versao_schema: mude o número ao alterar o banco, para invalidar o cache
     # e forçar a migração mesmo sem reiniciar o app.
     db.inicializar_banco()
@@ -440,6 +440,108 @@ elif menu == "Ajustes e Saques":
                     st.success("✅ Ajuste registrado!")
                 else:
                     st.error("❌ Erro ao registrar ajuste.")
+
+        # === ADMINISTRAÇÃO DE AJUSTES (somente administrador) ===
+        if st.session_state["eh_admin"]:
+            st.divider()
+            st.subheader("🛠️ Corrigir ou Excluir Ajustes (Administrador)")
+            id_func_adm = int(funcionarios_df.loc[funcionarios_df['nome'] == func_ajuste, 'id'].values[0])
+            ajustes_df = db.listar_ajustes_funcionario(id_func_adm)
+
+            if ajustes_df.empty:
+                st.info("Nenhum ajuste lançado para este funcionário.")
+            else:
+                opcoes_aj = {
+                    f"{row['data']} | {float(row['valor_decimal']):+.2f} h | {row['motivo']} (id {int(row['id'])})": int(row['id'])
+                    for _, row in ajustes_df.iterrows()
+                }
+                escolha_aj = st.selectbox("Ajuste", list(opcoes_aj.keys()), key="ajuste_admin_sel")
+                id_aj = opcoes_aj[escolha_aj]
+                reg_aj = ajustes_df[ajustes_df['id'] == id_aj].iloc[0]
+
+                with st.expander("✏️ Editar este ajuste"):
+                    ed_data = st.date_input("📅 Data", value=date.fromisoformat(str(reg_aj['data'])[:10]), key="ed_aj_data")
+                    ed_valor = st.number_input("💵 Valor em Horas", value=float(reg_aj['valor_decimal']),
+                                               step=0.5, format="%.2f", key="ed_aj_valor")
+                    ed_motivo = st.text_input("📝 Motivo", value=str(reg_aj['motivo']), key="ed_aj_motivo")
+                    if st.button("💾 Salvar Alteração", key="btn_ed_aj"):
+                        if ed_valor == 0:
+                            st.warning("⚠️ O valor não pode ser zero.")
+                        elif not ed_motivo.strip():
+                            st.warning("⚠️ Informe um motivo.")
+                        elif db.atualizar_ajuste(id_aj, ed_data.strftime('%Y-%m-%d'), ed_valor, ed_motivo.strip()):
+                            st.success("✅ Ajuste corrigido!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao corrigir ajuste.")
+
+                confirma_del = st.checkbox("Confirmo a exclusão deste ajuste (não tem como desfazer)", key="conf_del_aj")
+                if st.button("🗑️ Excluir este ajuste", type="secondary", disabled=not confirma_del, key="btn_del_aj"):
+                    if db.excluir_ajuste(id_aj):
+                        st.success("✅ Ajuste excluído!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Erro ao excluir ajuste.")
+
+        # === FECHAMENTO DO MÊS (somente administrador) ===
+        if st.session_state["eh_admin"]:
+            st.divider()
+            st.subheader("🗓️ Fechamento do Mês (Administrador)")
+            id_func_fech = int(funcionarios_df.loc[funcionarios_df['nome'] == func_ajuste, 'id'].values[0])
+            meses_fech = db.listar_meses_disponiveis()
+            opcoes_fech = [f"{NOMES_MESES[m]}/{y}" for (y, m) in meses_fech]
+            mes_fech = st.selectbox("🗓️ Mês de análise", opcoes_fech, key="fech_mes")
+            ano_f, mes_f = meses_fech[opcoes_fech.index(mes_fech)]
+            ano_mes_f = f"{ano_f:04d}-{mes_f:02d}"
+
+            saldo_mes_f = db.obter_saldo_mes(id_func_fech, ano_mes_f)
+            fech = db.obter_fechamento(id_func_fech, ano_mes_f)
+            st.metric("Saldo do mês (registros diários)", f"{saldo_mes_f:+.2f} h")
+
+            if fech is not None:
+                if fech['tipo'] == 'BANCO':
+                    st.info(f"🏦 Mês já transferido ao banco de horas ({float(fech['horas']):+.2f} h).")
+                else:
+                    st.info(f"💵 Horas extras já pagas: {float(fech['horas']):.2f} h, "
+                            f"data de pagamento {fech['data_pagamento']}.")
+            else:
+                confirma_fech = st.checkbox(
+                    "Confirmo o fechamento deste mês (não há estorno automático)", key="conf_fech")
+                col_banco, col_pag = st.columns(2)
+
+                with col_banco:
+                    st.markdown("**🏦 Banco de Horas**")
+                    st.caption("Transfere o saldo do mês para o banco de horas total.")
+                    if st.button("Transferir para o Banco", key="btn_fech_banco",
+                                 disabled=not confirma_fech, use_container_width=True):
+                        ok_f, msg_f = db.transferir_mes_para_banco(id_func_fech, ano_mes_f)
+                        if ok_f:
+                            st.success(f"✅ {msg_f}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg_f}")
+
+                with col_pag:
+                    st.markdown("**💵 Pagamento de Horas Extras**")
+                    st.caption("Baixa as horas extras positivas do mês; elas deixam de contar no banco.")
+                    data_pag = st.date_input("📅 Data do pagamento", rg.hoje_brasilia(), key="fech_data_pag")
+                    if st.button("Pagar Horas Extras", key="btn_fech_pag", type="primary",
+                                 disabled=(not confirma_fech) or saldo_mes_f <= 0,
+                                 use_container_width=True):
+                        ok_f, msg_f = db.pagar_horas_extras_mes(
+                            id_func_fech, ano_mes_f, data_pag.strftime('%Y-%m-%d'))
+                        if ok_f:
+                            st.success(f"✅ {msg_f}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msg_f}")
+
+            hist_fech = db.listar_fechamentos_funcionario(id_func_fech)
+            if not hist_fech.empty:
+                with st.expander("📜 Histórico de fechamentos do funcionário"):
+                    st.dataframe(hist_fech.rename(columns={
+                        "ano_mes": "Competência", "tipo": "Tipo", "horas": "Horas",
+                        "data_pagamento": "Data de pagamento"}), use_container_width=True, hide_index=True)
 
 # === MENU: RELATÓRIOS E EXPORTAÇÃO ===
 elif menu == "Relatórios e Exportação":
