@@ -869,6 +869,55 @@ def desfazer_transferencia_banco(id_funcionario, ano_mes):
     finally:
         conn.close()
 
+def _ultimo_dia_competencia(ano_mes):
+    import calendar
+    a, m = int(ano_mes[:4]), int(ano_mes[5:7])
+    return f"{a:04d}-{m:02d}-{calendar.monthrange(a, m)[1]:02d}"
+
+def _motivo_pagamento(ano_mes, data_pagamento):
+    ano, mes = ano_mes.split('-')
+    d = str(data_pagamento)[:10]
+    return f"Pagamento de horas extras - competência {mes}/{ano} (pago em {d[8:10]}/{d[5:7]}/{d[:4]})"
+
+def listar_pagamentos_a_corrigir():
+    """Pagamentos de horas extras já feitos cujo ajuste NÃO está datado no último dia da competência."""
+    df = _query_df(
+        "SELECT f.id_funcionario, fu.nome AS nome, f.ano_mes, f.horas, f.data_pagamento, "
+        "a.id AS id_ajuste, a.data AS data_ajuste, a.valor_decimal "
+        "FROM fechamentos f JOIN funcionarios fu ON fu.id = f.id_funcionario "
+        "JOIN ajustes a ON a.id_funcionario = f.id_funcionario "
+        "AND a.motivo LIKE 'Pagamento de horas extras - competência ' || substr(f.ano_mes, 6, 2) || '/' || substr(f.ano_mes, 1, 4) || '%' "
+        "WHERE f.tipo = 'PAGAMENTO' ORDER BY f.ano_mes, fu.nome")
+    if df.empty:
+        return []
+    saida = []
+    for _, r in df.iterrows():
+        nova = _ultimo_dia_competencia(r['ano_mes'])
+        if str(r['data_ajuste'])[:10] != nova:
+            saida.append(dict(id_ajuste=int(r['id_ajuste']), nome=r['nome'], ano_mes=r['ano_mes'],
+                              horas=float(r['valor_decimal']), data_atual=str(r['data_ajuste'])[:10],
+                              data_nova=nova, data_pagamento=str(r['data_pagamento'])[:10]))
+    return saida
+
+def corrigir_datas_pagamentos(ids_ajuste=None):
+    """Move a data dos ajustes de pagamento para o último dia da competência (valores intactos)."""
+    pend = listar_pagamentos_a_corrigir()
+    if ids_ajuste is not None:
+        pend = [p for p in pend if p['id_ajuste'] in set(ids_ajuste)]
+    conn = conectar()
+    qtd = 0
+    try:
+        for p in pend:
+            conn.execute("UPDATE ajustes SET data = ?, motivo = ? WHERE id = ?",
+                         (p['data_nova'], _motivo_pagamento(p['ano_mes'], p['data_pagamento']), p['id_ajuste']))
+            qtd += 1
+        conn.commit()
+        return True, qtd
+    except Exception:
+        return False, qtd
+    finally:
+        conn.close()
+
 def pagar_horas_extras_mes(id_funcionario, ano_mes, data_pagamento):
     """Baixa todo o saldo positivo do mês: registra o fechamento (com a data de
     pagamento) e um ajuste negativo na data do pagamento, para essas horas
@@ -877,7 +926,10 @@ def pagar_horas_extras_mes(id_funcionario, ano_mes, data_pagamento):
     if horas <= 0:
         return False, "O mês não tem saldo positivo de horas extras para pagar."
     ano, mes = ano_mes.split('-')
-    motivo = f"Pagamento de horas extras - competência {mes}/{ano}"
+    # O ajuste fica datado no ÚLTIMO DIA DA COMPETÊNCIA, para o mês das horas fechar em 0,00 nos relatórios.
+    # A data real do pagamento fica no fechamento e no motivo.
+    data_ajuste = _ultimo_dia_competencia(ano_mes)
+    motivo = _motivo_pagamento(ano_mes, data_pagamento)
     conn = conectar()
     try:
         # Fechamento primeiro: a restrição UNIQUE impede pagar o mês duas vezes.
@@ -894,7 +946,7 @@ def pagar_horas_extras_mes(id_funcionario, ano_mes, data_pagamento):
     try:
         conn.execute(
             "INSERT INTO ajustes (data, id_funcionario, valor_decimal, motivo) VALUES (?, ?, ?, ?)",
-            (data_pagamento, id_funcionario, -horas, motivo))
+            (data_ajuste, id_funcionario, -horas, motivo))
         conn.commit()
         return True, f"{horas:.2f} h pagas em {data_pagamento} e baixadas do banco de horas."
     except Exception as e:
