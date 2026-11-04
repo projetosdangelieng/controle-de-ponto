@@ -48,7 +48,7 @@ def _migrar_colunas_funcionarios():
 
 
 @st.cache_resource
-def _inicializar_banco_uma_vez(versao_schema=4):
+def _inicializar_banco_uma_vez(versao_schema=5):
     # versao_schema: mude o número ao alterar o banco, para invalidar o cache
     # e forçar a migração mesmo sem reiniciar o app.
     db.inicializar_banco()
@@ -199,7 +199,7 @@ if menu == "Lançamento Diário":
             )
 
         data_str = data_registro.strftime('%Y-%m-%d')
-        carga_func = float(funcionarios_df.loc[funcionarios_df['id'] == id_func, 'carga_horaria'].values[0])
+        carga_func = float(db.parametros_na_data(int(id_func), data_str)[0])
         carga_txt = f"{carga_func:g}"
 
         # Usuários comuns não lançam ponto em sábados, domingos e feriados.
@@ -677,10 +677,12 @@ elif menu == "Relatórios e Exportação":
                         "Movimentações": len(df_ext)
                     }
                     if ver_valores:
+                        vig_todas = db.listar_todas_vigencias()
                         rf = funcionarios_df.loc[funcionarios_df['nome'] == func_nome].iloc[0]
                         total_rs = sum(rg.valores_por_movimento(
                             df_ext['Data'], df_ext['Movimentacao'],
-                            rf['salario'], rf['carga_horaria'], rf['divisor_horas'], feriados_rel))
+                            rf['salario'], rf['carga_horaria'], rf['divisor_horas'], feriados_rel,
+                            vig_todas.get(int(rf['id']))))
                         valores_totais[func_nome] = round(total_rs, 2)
                         linha_resumo["Valor (R$)"] = round(total_rs, 2)
                     resumo_data.append(linha_resumo)
@@ -719,10 +721,11 @@ elif menu == "Relatórios e Exportação":
                 com_valor = False
                 if st.session_state["eh_admin"]:
                     linha_rel = funcionarios_df.loc[funcionarios_df['id'] == id_func_rel].iloc[0]
-                    if float(linha_rel['salario'] or 0) > 0:
+                    if float(linha_rel['salario'] or 0) > 0 or db.listar_todas_vigencias().get(int(id_func_rel)):
                         valores_rs = rg.valores_por_movimento(
                             df_extrato['Data'], df_extrato['Movimentacao'],
-                            linha_rel['salario'], linha_rel['carga_horaria'], linha_rel['divisor_horas'], _feriados_set())
+                            linha_rel['salario'], linha_rel['carga_horaria'], linha_rel['divisor_horas'], _feriados_set(),
+                            db.listar_todas_vigencias().get(int(id_func_rel)))
                         df_extrato_display['Valor (R$)'] = valores_rs
                         df_extrato = df_extrato.copy()
                         df_extrato['Valor (R$)'] = valores_rs
@@ -884,7 +887,7 @@ elif menu == "Configurações":
 
             st.divider()
             st.subheader("⏱️ Carga Horária e Salário")
-            st.caption("Ao salvar uma nova carga horária, os saldos de todos os registros já lançados desse funcionário são recalculados.")
+            st.caption("Ao salvar uma nova carga horária BASE, os saldos dos registros já lançados são recalculados (respeitando mudanças por data, abaixo). Para mudar só a partir de uma data, use a seção \"Mudança a partir de uma data\".")
             f_sel = st.selectbox("Funcionário", funcionarios_df['nome'].tolist(), key="carga_func_sel")
             linha_f = funcionarios_df.loc[funcionarios_df['nome'] == f_sel].iloc[0]
             atual = float(linha_f['carga_horaria'])
@@ -922,6 +925,47 @@ elif menu == "Configurações":
                     st.rerun()
                 else:
                     st.error("❌ Erro ao atualizar os dados do funcionário.")
+
+            st.divider()
+            st.subheader("📅 Mudança de Carga Horária / Salário a partir de uma data")
+            st.caption("Use quando a carga horária ou o salário muda numa data específica. Os registros ANTERIORES à data "
+                       "não são alterados; os da data em diante são recalculados e os relatórios passam a usar os novos valores.")
+            id_fv = int(linha_f['id'])
+            vigs = db.listar_vigencias(id_fv)
+            base_txt_v = f"Base (até a 1ª mudança): {atual:g}h/dia, salário R$ {sal_atual:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            st.write(base_txt_v)
+            if vigs:
+                st.dataframe([{"A partir de": v["inicio"][8:10] + "/" + v["inicio"][5:7] + "/" + v["inicio"][:4],
+                               "Carga diária (h)": v["carga_horaria"], "Salário (R$)": v["salario"],
+                               "Divisor fixo": v["divisor_horas"] or 0} for v in vigs],
+                             use_container_width=True, hide_index=True)
+            v1, v2, v3, v4 = st.columns(4)
+            hoje_v = rg.hoje_brasilia()
+            v_ini = v1.date_input("A partir de", value=hoje_v.replace(day=1), format="DD/MM/YYYY", key=f"vig_ini_{f_sel}")
+            v_carga = v2.number_input("Nova carga diária (h)", min_value=1.0, max_value=12.0, value=atual, step=0.5, key=f"vig_carga_{f_sel}")
+            v_sal = v3.number_input("Novo salário (R$)", min_value=0.0, value=sal_atual, step=100.0, format="%.2f", key=f"vig_sal_{f_sel}")
+            v_div = v4.number_input("Divisor fixo (0 = automático)", min_value=0.0, max_value=300.0, value=0.0, step=1.0, key=f"vig_div_{f_sel}")
+            if st.button("💾 Salvar mudança a partir da data", type="primary", use_container_width=True, key="btn_salvar_vig"):
+                ok_v, qtd_v = db.salvar_vigencia(id_fv, v_ini.strftime('%Y-%m-%d'), v_carga, v_sal, v_div)
+                if ok_v:
+                    st.session_state["vig_msg"] = f"✅ {f_sel}: {v_carga:g}h/dia e R$ {v_sal:,.2f} a partir de {v_ini.strftime('%d/%m/%Y')}. {qtd_v} registro(s) recalculado(s)."
+                    st.rerun()
+                else:
+                    st.error("❌ Erro ao salvar a mudança.")
+            if st.session_state.get("vig_msg"):
+                st.success(st.session_state.pop("vig_msg"))
+            if vigs:
+                with st.expander("🗑️ Remover uma mudança"):
+                    opc_v = {v["inicio"][8:10] + "/" + v["inicio"][5:7] + "/" + v["inicio"][:4]: v["inicio"] for v in vigs}
+                    sel_v = st.selectbox("Mudança a remover", list(opc_v.keys()), key="vig_del_sel")
+                    conf_v = st.checkbox("Confirmo remover esta mudança (os registros dessa data em diante voltam aos valores anteriores)", key="vig_del_conf")
+                    if st.button("Remover mudança", disabled=not conf_v, key="btn_vig_del"):
+                        ok_d, qtd_d = db.excluir_vigencia(id_fv, opc_v[sel_v])
+                        if ok_d:
+                            st.session_state["vig_msg"] = f"✅ Mudança removida. {qtd_d} registro(s) recalculado(s)."
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao remover.")
         else:
             st.info("ℹ️ Nenhum funcionário cadastrado.")
 
