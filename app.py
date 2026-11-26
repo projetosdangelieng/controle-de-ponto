@@ -941,11 +941,12 @@ elif menu == "Configurações":
                     conf_nome = st.text_input(f"Para confirmar, digite o nome exatamente: {nome_sel}", key=f"func_del_conf_{id_sel}")
                     if st.button("🗑️ Excluir definitivamente", type="primary", disabled=conf_nome.strip() != nome_sel,
                                  use_container_width=True, key="btn_func_del"):
-                        if db.deletar_funcionario(id_sel):
+                        ok_del, erro_del = db.deletar_funcionario(id_sel)
+                        if ok_del:
                             st.session_state["func_status_msg"] = f"✅ {nome_sel} e todo o histórico foram excluídos."
                             st.rerun()
                         else:
-                            st.error("❌ Erro ao excluir o funcionário.")
+                            st.error(f"❌ Erro ao excluir o funcionário: {erro_del}")
 
         if not funcionarios_df.empty:
 
