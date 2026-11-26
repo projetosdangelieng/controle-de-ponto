@@ -656,23 +656,34 @@ def definir_ativo_funcionario(id_funcionario, ativo):
         conn.close()
 
 def deletar_funcionario(id_funcionario):
-    """Exclui DEFINITIVAMENTE um funcionário e todo o seu histórico (registros,
-    ajustes, fechamentos e mudanças por data). Logins vinculados a ele ficam
-    sem vínculo (não são apagados)."""
+    """Exclui DEFINITIVAMENTE um funcionário e todo o seu histórico. Procura no
+    banco todas as tabelas que apontam para o funcionário (inclusive tabelas
+    antigas que não estão no código): apaga as linhas dele e, em usuarios,
+    apenas desfaz o vínculo do login. Retorna (sucesso, mensagem_de_erro)."""
     conn = conectar()
     try:
-        conn.execute("DELETE FROM registros WHERE id_funcionario = ?", (id_funcionario,))
-        conn.execute("DELETE FROM ajustes WHERE id_funcionario = ?", (id_funcionario,))
-        conn.execute("DELETE FROM vigencias WHERE id_funcionario = ?", (id_funcionario,))
-        conn.execute("DELETE FROM fechamentos WHERE id_funcionario = ?", (id_funcionario,))
-        conn.execute("UPDATE usuarios SET id_funcionario = NULL WHERE id_funcionario = ?", (id_funcionario,))
+        tabelas = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+        for t in tabelas:
+            if t == "funcionarios":
+                continue
+            cols_fk = {r[3] for r in conn.execute(f'PRAGMA foreign_key_list("{t}")').fetchall()
+                       if str(r[2]).lower() == "funcionarios"}
+            cols = {r[1] for r in conn.execute(f'PRAGMA table_info("{t}")').fetchall()}
+            if "id_funcionario" in cols:
+                cols_fk.add("id_funcionario")
+            for col in cols_fk:
+                if t == "usuarios":
+                    conn.execute(f'UPDATE "{t}" SET "{col}" = NULL WHERE "{col}" = ?', (id_funcionario,))
+                else:
+                    conn.execute(f'DELETE FROM "{t}" WHERE "{col}" = ?', (id_funcionario,))
         conn.execute("DELETE FROM funcionarios WHERE id = ?", (id_funcionario,))
         conn.commit()
-        _limpar_cache(listar_funcionarios)
-        return True
-    except Exception:
-        return False
+        return True, ""
+    except Exception as e:
+        return False, str(e)
     finally:
+        _limpar_cache(listar_funcionarios)
         conn.close()
 
 # ============= FUNÇÕES DE REGISTROS =============
