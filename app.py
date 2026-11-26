@@ -31,6 +31,7 @@ COLUNAS_FUNCIONARIOS = (
     ("carga_horaria", "REAL NOT NULL DEFAULT 8.0"),
     ("salario", "REAL NOT NULL DEFAULT 0"),
     ("divisor_horas", "REAL"),
+    ("ativo", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 
@@ -48,7 +49,7 @@ def _migrar_colunas_funcionarios():
 
 
 @st.cache_resource
-def _inicializar_banco_uma_vez(versao_schema=5):
+def _inicializar_banco_uma_vez(versao_schema=6):
     # versao_schema: mude o número ao alterar o banco, para invalidar o cache
     # e forçar a migração mesmo sem reiniciar o app.
     db.inicializar_banco()
@@ -56,13 +57,17 @@ def _inicializar_banco_uma_vez(versao_schema=5):
     return True
 
 
-def _listar_funcionarios():
+def _listar_funcionarios(incluir_inativos=False):
     """db.listar_funcionarios() garantindo as colunas novas (com valores padrão),
-    para nenhuma tela quebrar por coluna ausente."""
+    para nenhuma tela quebrar por coluna ausente. Por padrão traz só os ativos;
+    incluir_inativos=True traz também os desligados (relatórios/configurações)."""
     df = db.listar_funcionarios().copy()
-    for nome, padrao in (("carga_horaria", 8.0), ("salario", 0.0), ("divisor_horas", None)):
+    for nome, padrao in (("carga_horaria", 8.0), ("salario", 0.0), ("divisor_horas", None), ("ativo", 1)):
         if nome not in df.columns:
             df[nome] = padrao
+    df["ativo"] = df["ativo"].fillna(1).astype(int)
+    if not incluir_inativos:
+        df = df[df["ativo"] == 1].reset_index(drop=True)
     return df
 
 _inicializar_banco_uma_vez()
@@ -605,7 +610,8 @@ elif menu == "Ajustes e Saques":
 elif menu == "Relatórios e Exportação":
     st.header("📊 Relatórios e Exportação")
 
-    funcionarios_df = _listar_funcionarios()
+    # Inclui desligados: o histórico de horas deles continua nos relatórios.
+    funcionarios_df = _listar_funcionarios(incluir_inativos=True)
 
     if not funcionarios_df.empty:
         # === FILTROS ===
@@ -888,19 +894,60 @@ elif menu == "Configurações":
                 st.error("❌ Digite um nome válido.")
 
         st.divider()
-        st.subheader("📋 Funcionários Ativos")
+        st.subheader("📋 Funcionários")
 
-        funcionarios_df = _listar_funcionarios()
+        todos_func_df = _listar_funcionarios(incluir_inativos=True)
+        funcionarios_df = todos_func_df[todos_func_df["ativo"] == 1].reset_index(drop=True)
+        if st.session_state.get("func_status_msg"):
+            st.success(st.session_state.pop("func_status_msg"))
+        if not todos_func_df.empty:
+            tabela_func = todos_func_df.copy()
+            tabela_func["Situação"] = tabela_func["ativo"].map({1: "✅ Ativo", 0: "⛔ Desligado"})
+            st.dataframe(tabela_func.drop(columns=["ativo"]), hide_index=True, use_container_width=True)
+
+            if st.session_state["eh_admin"]:
+                st.divider()
+                st.subheader("🚪 Desligar, Reativar ou Excluir Funcionário")
+                st.caption("**Desligar** tira o funcionário das telas de lançamento e de ajustes, mas mantém todo o "
+                           "histórico de horas nos relatórios (recomendado para demitidos). **Excluir definitivamente** "
+                           "apaga o funcionário e TODO o histórico dele, sem volta — faça um backup antes.")
+                rotulos_func = {
+                    (r["nome"] if r["ativo"] == 1 else f"{r['nome']} (desligado)"): int(r["id"])
+                    for _, r in todos_func_df.iterrows()
+                }
+                sel_rot = st.selectbox("Funcionário", list(rotulos_func.keys()), key="func_status_sel")
+                id_sel = rotulos_func[sel_rot]
+                linha_sel = todos_func_df.loc[todos_func_df["id"] == id_sel].iloc[0]
+                nome_sel = str(linha_sel["nome"])
+
+                if int(linha_sel["ativo"]) == 1:
+                    if st.button(f"⛔ Desligar {nome_sel} (manter histórico)", use_container_width=True, key="btn_desligar"):
+                        if db.definir_ativo_funcionario(id_sel, False):
+                            st.session_state["func_status_msg"] = f"✅ {nome_sel} foi desligado. O histórico continua nos relatórios."
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao desligar o funcionário.")
+                else:
+                    if st.button(f"♻️ Reativar {nome_sel}", use_container_width=True, key="btn_reativar"):
+                        if db.definir_ativo_funcionario(id_sel, True):
+                            st.session_state["func_status_msg"] = f"✅ {nome_sel} foi reativado."
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao reativar o funcionário.")
+
+                with st.expander("🗑️ Excluir definitivamente (apaga todo o histórico)"):
+                    st.warning(f"Isto apaga {nome_sel} e todos os lançamentos, ajustes, fechamentos e mudanças "
+                               "de carga/salário dele. Não dá para desfazer.")
+                    conf_nome = st.text_input(f"Para confirmar, digite o nome exatamente: {nome_sel}", key=f"func_del_conf_{id_sel}")
+                    if st.button("🗑️ Excluir definitivamente", type="primary", disabled=conf_nome.strip() != nome_sel,
+                                 use_container_width=True, key="btn_func_del"):
+                        if db.deletar_funcionario(id_sel):
+                            st.session_state["func_status_msg"] = f"✅ {nome_sel} e todo o histórico foram excluídos."
+                            st.rerun()
+                        else:
+                            st.error("❌ Erro ao excluir o funcionário.")
+
         if not funcionarios_df.empty:
-            col_func, col_acao = st.columns([3, 1])
-
-            with col_func:
-                st.dataframe(funcionarios_df, hide_index=True, use_container_width=True)
-
-            with col_acao:
-                st.markdown("**Ações:**")
-                if st.button("🗑️ Remover Selecionado", type="secondary", use_container_width=True):
-                    st.info("Selecione um funcionário e confirme a exclusão.")
 
             st.divider()
             st.subheader("⏱️ Carga Horária e Salário")

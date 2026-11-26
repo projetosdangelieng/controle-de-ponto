@@ -462,6 +462,7 @@ COLUNAS_FUNCIONARIOS = {
     "carga_horaria": "REAL NOT NULL DEFAULT 8.0",
     "salario": "REAL NOT NULL DEFAULT 0",
     "divisor_horas": "REAL",
+    "ativo": "INTEGER NOT NULL DEFAULT 1",
 }
 
 def _garantir_colunas_funcionarios():
@@ -640,18 +641,36 @@ def excluir_vigencia(id_funcionario, inicio):
     finally:
         conn.close()
 
+def definir_ativo_funcionario(id_funcionario, ativo):
+    """Desativa (desligado) ou reativa um funcionário. O histórico de horas,
+    ajustes e fechamentos é mantido; inativos somem das telas de lançamento."""
+    conn = conectar()
+    try:
+        conn.execute("UPDATE funcionarios SET ativo = ? WHERE id = ?", (1 if ativo else 0, id_funcionario))
+        conn.commit()
+        _limpar_cache(listar_funcionarios)
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
 def deletar_funcionario(id_funcionario):
-    """Deleta um funcionário e seus registros."""
+    """Exclui DEFINITIVAMENTE um funcionário e todo o seu histórico (registros,
+    ajustes, fechamentos e mudanças por data). Logins vinculados a ele ficam
+    sem vínculo (não são apagados)."""
     conn = conectar()
     try:
         conn.execute("DELETE FROM registros WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM ajustes WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM vigencias WHERE id_funcionario = ?", (id_funcionario,))
+        conn.execute("DELETE FROM fechamentos WHERE id_funcionario = ?", (id_funcionario,))
+        conn.execute("UPDATE usuarios SET id_funcionario = NULL WHERE id_funcionario = ?", (id_funcionario,))
         conn.execute("DELETE FROM funcionarios WHERE id = ?", (id_funcionario,))
         conn.commit()
         _limpar_cache(listar_funcionarios)
         return True
-    except Exception as e:
+    except Exception:
         return False
     finally:
         conn.close()
